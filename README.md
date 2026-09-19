@@ -54,6 +54,14 @@ Vor der ersten Ausführung müssen die Angaben am Anfang des Skripts angepasst w
 
 Das Skript verwendet Bash und GNU-Coreutils, für diese Prüfungen und den Dump insbesondere `realpath` mit `-e`/`-m`, `mktemp` und `mv -T`.
 
+## Vorprüfungen und externe Sicherungsziele
+
+Fehlende Pflichtprogramme werden vor dem ersten externen Aufruf gemeldet. Vor dem Export wird außerdem mit eigenen temporären Dateien geprüft, ob sich im Sicherungsziel Dateien anlegen, schreiben, lesen, ersetzen und entfernen lassen. Bei einem Fehler bleiben vorhandene Sicherungsdateien und das bisherige Protokoll unverändert. Fehlende Werkzeuge für die optionale Updateprüfung verhindern das Backup nicht.
+
+Für USB-Platten und Netzwerkfreigaben können `backup_mountpoint` und `backup_mount_source` gemeinsam gesetzt werden. Das Skript verlangt dann am angegebenen Mountpunkt die erwartete Quelle, beispielsweise eine Dateisystem-UUID oder eine SMB-/NFS-Freigabe. Die Prüfung erfolgt vor dem Anlegen des Backup-Ordners und wird vor wichtigen Schreib- und Löschschritten wiederholt. Mit beiden Angaben leer bleibt der Schutz ausgeschaltet. Bei eingeschaltetem Schutz wird zusätzlich `findmnt` aus util-linux benötigt.
+
+Ein vorhandener Ordner allein beweist nicht, dass das gewünschte Medium eingehängt ist. Die Prüfung des Sicherungsmediums ergänzt die separate Docker-Mount-Prüfung des Exportordners. Beispiele, Voraussetzungen und Grenzen stehen unter [Vorprüfungen und externe Sicherungsziele](docs/BACKUP-TARGET.md).
+
 ## Compose, Portainer und Exportpfade
 
 Mit `docker_mode="auto"` wird eine Compose-Datei direkt im Projektverzeichnis verwendet, falls eine vorhanden ist; ansonsten werden die angegebenen Containernamen angesprochen. `docker_mode="compose"` und `docker_mode="container"` legen die Auswahl ausdrücklich fest. Sobald Compose gewählt ist, führen Fehler oder eine mehrdeutige Containerauswahl zum Abbruch statt zu einem Wechsel auf andere Container. Leere Servicenamen auf beiden Seiten wählen im Auto-Modus weiterhin die Containernamen, sofern keine Compose-Dateien ausdrücklich angegeben wurden.
@@ -143,7 +151,7 @@ Die integrierte Exportfunktion von Paperless-ngx wird ausgeführt. Bitte warten.
 - Details zur Versionsgeschichte findest du in der Datei [CHANGELOG](CHANGELOG)
 
 ## Regressionstests
-Die Tests prüfen Dateinamen, Pfade mit Leerzeichen, fehlgeschlagene Update-Abfragen, Konfigurationsfehler, den Erhalt vorheriger Dumps, Fehlercodes und gespeicherte Diagnosen sowie die Grenzen der Versionsbereinigung in temporären Testverzeichnissen. Hinzu kommen Compose-/Container-Auswahl, externe Konfigurationen, abweichende Exportpfade und der Abbruch vor dem Export bei ungeeigneten Mounts:
+Die Tests prüfen Dateinamen, Pfade mit Leerzeichen, fehlgeschlagene Update-Abfragen, Konfigurationsfehler, den Erhalt vorheriger Dumps, Fehlercodes und gespeicherte Diagnosen sowie die Grenzen der Versionsbereinigung in temporären Testverzeichnissen. Hinzu kommen Compose-/Container-Auswahl, externe Konfigurationen, abweichende Exportpfade, fehlende Programme, Schreibtestfehler sowie fehlende, falsche oder während der Sicherung gewechselte Mounts:
 
 ```bash
 bash tests/regression.sh

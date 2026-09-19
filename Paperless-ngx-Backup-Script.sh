@@ -14,6 +14,13 @@ version="1.0-700"
 # Pfad zum lokalen Datensicherungsziel
 backup_dir="/Absoluter/Pfad/zum/Datensicherungsziel"
 
+# Optionaler Schutz externer Sicherungsziele: beide leer = ausgeschaltet.
+# Beispiel: /media/USB und UUID=12345678-1234-1234-1234-123456789abc
+# Für Freigaben als Quelle z. B. //server/backup oder server:/backup angeben.
+# backup_dir muss ein Unterverzeichnis dieses Mountpunkts sein.
+backup_mountpoint=""
+backup_mount_source=""
+
 # Dateiname des Sicherungsprotokolls
 logfile_name="Protokoll_der_letzten_Sicherung.log"
 
@@ -75,6 +82,23 @@ set -e
 # Rückgabewert auf den ersten fehlerhaften Befehl innerhalb der Pipeline setzen
 set -o pipefail
 
+# Pflichtprogramme vor dem ersten externen Aufruf prüfen. Update-Helfer bleiben optional.
+preflight_error() { printf 'Vorprüfungsfehler: %s\n' "$*" >&2; exit 1; }
+(( BASH_VERSINFO[0] >= 4 )) || preflight_error 'Bash ab Version 4 wird benötigt.'
+required_commands=(dirname date realpath stat mkdir rmdir tee docker ls rsync mktemp mv cp chown rm)
+if [[ "${version_history}" =~ ^[1-9][0-9]*$ ]]; then required_commands+=(find cat); fi
+if [[ -n "${backup_mountpoint}${backup_mount_source}" ]]; then required_commands+=(findmnt); fi
+missing_commands=()
+for required_command in "${required_commands[@]}"; do
+    command -v "${required_command}" >/dev/null 2>&1 || missing_commands+=("${required_command}")
+done
+[[ "${#missing_commands[@]}" -eq 0 ]] || preflight_error "Benötigte Programme fehlen: ${missing_commands[*]}"
+[[ "$(realpath -e -- /)" == / && "$(realpath -m -- /)" == / ]] || preflight_error 'realpath muss -e, -m und -- unterstützen (GNU-Coreutils).'
+[[ "$(stat -c '%h' -- /)" =~ ^[0-9]+$ ]] || preflight_error 'stat muss -c unterstützen (GNU-Coreutils).'
+if [[ "${version_history}" =~ ^[1-9][0-9]*$ ]]; then
+    find / -maxdepth 0 -mtime +0 -print >/dev/null || preflight_error 'find muss -maxdepth und -mtime unterstützen.'
+fi
+
 # Funktion: Aktuelles Datum
 datestamp() { date +"%d.%m.%Y"; }
 
@@ -114,6 +138,13 @@ if [[ "${backup_root}" == "${project_dir}" || "${backup_root}" == "${project_dir
     config_error 'Projekt- und Sicherungsverzeichnis dürfen sich nicht überschneiden.'
 fi
 [[ ! -e "${backup_root}" || -d "${backup_root}" ]] || config_error 'Das Sicherungsziel ist kein Verzeichnis.'
+if [[ -n "${backup_mountpoint}${backup_mount_source}" ]]; then
+    [[ "${backup_mountpoint}" == /* && "${backup_mountpoint}" != *[[:cntrl:]]* &&
+       -n "${backup_mount_source}" && "${backup_mount_source}" != *[[:cntrl:]]* ]] || config_error 'Mountpunkt und Mount-Quelle müssen gemeinsam angegeben werden; der Mountpunkt muss absolut sein.'
+    [[ -d "${backup_mountpoint}" ]] || config_error 'Der erwartete Mountpunkt existiert nicht.'
+    backup_mountpoint=$(realpath -e -- "${backup_mountpoint}")
+    [[ "${backup_mountpoint}" != / && "${backup_root}" == "${backup_mountpoint}/"* ]] || config_error 'Das Sicherungsziel muss unterhalb des erwarteten Mountpunkts liegen.'
+fi
 for service_name in "${project_service_name}" "${postgres_service_name}"; do
     [[ -z "${service_name}" || "${service_name}" =~ ^[a-zA-Z0-9_.-]+$ ]] || config_error 'Ungültiger Docker-Servicename.'
 done
@@ -245,6 +276,54 @@ else
 fi
 for config_file in "${additional_config_files[@]}"; do add_config_file "${config_file}"; done
 
+# Nur numerische Mount-IDs auswerten: Quellen mit Leerzeichen bleiben Argumente,
+# findmnt-Ausgaben werden weder als Shellcode gelesen noch mit eval ausgewertet.
+backup_mount_id=
+check_backup_mount() {
+    [[ -n "${backup_mountpoint}" ]] || return 0
+    local mount_id target_id existing_path="${backup_root}"
+    if ! mount_id=$(findmnt --kernel --noheadings --raw --output ID --mountpoint "${backup_mountpoint}" --source "${backup_mount_source}" --options rw) ||
+       [[ ! "${mount_id}" =~ ^[0-9]+$ ]]; then
+        printf 'Vorprüfungsfehler: Erwartetes Sicherungsmedium fehlt, ist nicht eindeutig zugeordnet oder nicht schreibbar eingehängt.\n' >&2
+        return 1
+    fi
+    while [[ ! -e "${existing_path}" ]]; do
+        if [[ "${existing_path}" == "${backup_mountpoint}" || "${existing_path}" == / || -z "${existing_path}" ]]; then
+            printf 'Vorprüfungsfehler: Der erwartete Mountpfad ist nicht mehr verfügbar.\n' >&2
+            return 1
+        fi
+        existing_path="${existing_path%/*}"
+    done
+    if ! target_id=$(findmnt --kernel --noheadings --raw --output ID --target "${existing_path:-/}") ||
+       [[ "${target_id}" != "${mount_id}" || ( -n "${backup_mount_id}" && "${mount_id}" != "${backup_mount_id}" ) ]]; then
+        printf 'Vorprüfungsfehler: Das Sicherungsziel liegt auf einem anderen oder inzwischen gewechselten Mount.\n' >&2
+        return 1
+    fi
+    backup_mount_id="${mount_id}"
+}
+
+# Eigene temporäre Dateien verwenden; ein vorhandenes Protokoll bleibt bei Fehlern erhalten.
+# Neben Schreiben/Lesen/Löschen auch das für Dumps benötigte mv -T prüfen.
+check_backup_writable() (
+    probe_dir=$(mktemp -d -- "${backup_root}/.paperless-preflight.XXXXXX") || preflight_error 'Im Sicherungsziel kann kein Testverzeichnis angelegt werden.'
+    cleanup_probe() {
+        local status=$?
+        trap - EXIT
+        if ! check_backup_mount || ! rm -f -- "${probe_dir}/source" "${probe_dir}/target" || ! rmdir -- "${probe_dir}"; then
+            printf 'Vorprüfungsfehler: Temporäre Schreibtestdateien konnten nicht entfernt werden: %s\n' "${probe_dir}" >&2
+            status=1
+        fi
+        exit "${status}"
+    }
+    trap cleanup_probe EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    printf 'paperless-write-test\n' > "${probe_dir}/source" || preflight_error 'Schreiben im Sicherungsziel fehlgeschlagen.'
+    printf 'replace-me\n' > "${probe_dir}/target" || preflight_error 'Schreiben im Sicherungsziel fehlgeschlagen.'
+    mv -fT -- "${probe_dir}/source" "${probe_dir}/target" || preflight_error 'Umbenennen im Sicherungsziel fehlgeschlagen; mv muss -T unterstützen.'
+    [[ "$(< "${probe_dir}/target")" == paperless-write-test ]] || preflight_error 'Lesekontrolle im Sicherungsziel fehlgeschlagen.'
+)
+
 logfile="${backup_root}/${logfile_name}"
 [[ ! -L "${logfile}" && ( ! -e "${logfile}" || -f "${logfile}" ) ]] || config_error 'Die Protokolldatei darf kein symbolischer Link oder Verzeichnis sein.'
 if [[ -f "${logfile}" ]]; then
@@ -252,7 +331,11 @@ if [[ -f "${logfile}" ]]; then
 fi
 
 # Datensicherungsziel erstellen und seinen absoluten Pfad festhalten
+check_backup_mount
 mkdir -p -- "${backup_root}"
+check_backup_mount
+check_backup_writable
+check_backup_mount
 backup_dir="${backup_root}"
 
 # Standardausgabe und Fehler gemeinsam protokollieren. Ein Dump leitet nur seine
@@ -268,7 +351,7 @@ finish() {
     local status=$? log_status
     trap - EXIT
     if [[ -n "${dump_tmp}" ]]; then
-        if ! rm -f -- "${dump_tmp}"; then
+        if ! check_backup_mount || ! rm -f -- "${dump_tmp}"; then
             log ' - Die temporäre Dump-Datei konnte nicht entfernt werden.'
             [[ "${status}" -ne 0 ]] || status=1
         fi
@@ -366,7 +449,10 @@ if [[ -d "${backup_dir}" ]]; then
     # Beginn des Protokolls...
 
     # Prüfen, ob das verwendete Skript aktuell ist oder ob ein Update auf GitHub verfügbar ist
-    if git_version=$(wget --no-check-certificate --timeout=60 --tries=1 -q -O- "https://raw.githubusercontent.com/toafez/Paperless-ngx-Backup-Script/refs/heads/main/Paperless-ngx-Backup-Script.sh" | grep '^version=' | cut -d '"' -f2) && [[ -n "${git_version}" ]]; then
+    if ! command -v wget >/dev/null 2>&1 || ! command -v grep >/dev/null 2>&1 ||
+       ! command -v cut >/dev/null 2>&1 || ! command -v dpkg >/dev/null 2>&1; then
+        log ' - Hinweis: Die Updateprüfung wird übersprungen; benötigte Update-Helfer fehlen (wget, grep, cut oder dpkg).'
+    elif git_version=$(wget --no-check-certificate --timeout=60 --tries=1 -q -O- "https://raw.githubusercontent.com/toafez/Paperless-ngx-Backup-Script/refs/heads/main/Paperless-ngx-Backup-Script.sh" | grep '^version=' | cut -d '"' -f2) && [[ -n "${git_version}" ]]; then
         if dpkg --compare-versions "${git_version}" gt "${version}"; then
             log "${hr}"
             log "WICHTIGER HINWEIS:"
@@ -375,6 +461,11 @@ if [[ -d "${backup_dir}" ]]; then
             log "Link: https://github.com/toafez/Paperless-ngx-Backup-Script"
             log "${hr}"
             log ""
+        else
+            update_status=$?
+            if [[ "${update_status}" -ne 1 ]]; then
+                log ' - Hinweis: Der Versionsvergleich ist fehlgeschlagen. Die Updateprüfung wird übersprungen; die Datensicherung wird fortgesetzt.'
+            fi
         fi
     else
         log " - Hinweis: Die Updateprüfung konnte nicht abgeschlossen werden (z. B. keine Internetverbindung)."
@@ -395,6 +486,11 @@ if [[ -d "${backup_dir}" ]]; then
         log "${hr}"
         log "${project_container_name} Datensicherungsprotokoll vom $(datestamp) um $(timestamp) Uhr"
         log " - Datensicherungsziel: ${backup_dir}"
+        if [[ -n "${backup_mountpoint}" ]]; then
+            log " - Mountschutz des Sicherungsziels: eingeschaltet (${backup_mountpoint})"
+        else
+            log ' - Mountschutz des Sicherungsziels: ausgeschaltet'
+        fi
         log "${hr}"
         log ""
 
@@ -419,6 +515,8 @@ if [[ -d "${backup_dir}" ]]; then
         fi
 
         # Sichern aller Dokumente in das geprüfte Exportverzeichnis
+        backup_step='Prüfung des Sicherungsmediums'
+        check_backup_mount
         backup_step='Paperless-ngx-Export'
         log "Die integrierte Exportfunktion von Paperless-ngx wird ausgeführt. Bitte warten..."
         docker exec "${paperless_id}" document_exporter "${export_container_dir}" -d -p -z
@@ -432,6 +530,7 @@ if [[ -d "${backup_dir}" ]]; then
 
         # Prüfen, ob Dokumente im Paperless-NGX-Exportverzeichnis vorhanden sind
         backup_step='Übertragung des Exportverzeichnisses'
+        check_backup_mount
         if export_files=$(ls -A -- "${export_host_dir}") && [[ -n "${export_files}" ]]; then
 
             # Auch bei abweichendem Quellnamen immer in den Sicherungsordner export kopieren.
@@ -450,6 +549,7 @@ if [[ -d "${backup_dir}" ]]; then
 
         # Den bereits geprüften Datenbankcontainer direkt über seine ID ansprechen.
         backup_step='PostgreSQL-Dump'
+        check_backup_mount
         cd -- "${project_dir}"
 
         # Den bisherigen Dump erst nach erfolgreicher, nicht leerer Ausgabe
@@ -462,6 +562,7 @@ if [[ -d "${backup_dir}" ]]; then
         cd "${script_dir}"
 
         if [[ -s "${dump_tmp}" ]]; then
+            check_backup_mount
             mv -fT -- "${dump_tmp}" "${backup_dir}/postgres-dump.sql"
             dump_tmp=
             log " - Der Dump der PostgreSQL-Datenbank wurde in der Datei [ postgres-dump.sql ] gesichert."
@@ -472,6 +573,7 @@ if [[ -d "${backup_dir}" ]]; then
 
         # Die vorab geprüften lokalen und ausdrücklich angegebenen Dateien sichern.
         backup_step='Sicherung der Konfigurationsdateien'
+        check_backup_mount
         yaml_found=false
         env_found=false
         for config_file in "${config_files[@]}"; do
@@ -494,11 +596,13 @@ if [[ -d "${backup_dir}" ]]; then
 
         # Passe Ordner- und Dateireche im Sicherungsziel an
         backup_step='Anpassung der Besitzrechte'
+        check_backup_mount
         chown -R -- "${dir_user}:${dir_group}" "${backup_dir}"
         log " - Die Ordner- und Dateirechte im Datensicherungsziel wurden auf [ ${dir_user}:${dir_group} ] gesetzt."
 
         # Nur eindeutig gekennzeichnete, abgeschlossene Versionsordner automatisch löschen
         backup_step='Versionsbereinigung'
+        check_backup_mount
         if [[ "${version_history}" =~ ^[1-9][0-9]*$ ]]; then
             if [[ "${backup_complete}" == true ]]; then
                 printf 'Paperless-ngx-Backup-Script:%s\n' "${backup_dir##*/}" > "${backup_dir}/.paperless-ngx-backup"
@@ -511,6 +615,7 @@ if [[ -d "${backup_dir}" ]]; then
                     [[ "$(cat -- "${marker}")" == "Paperless-ngx-Backup-Script:${old_name}" ]] || continue
                     expired_backup=$(find "${old_backup}" -maxdepth 0 -type d -mtime +"${version_history}" -print)
                     [[ -n "${expired_backup}" ]] || continue
+                    check_backup_mount
                     rm -rf -- "${old_backup}"
                     log " - Versionsstand [ ${old_name} ], älter als [ ${version_history} ] Tag(e), wurde gelöscht."
                 done

@@ -43,12 +43,13 @@ wget() {
         empty) return 0 ;;
         malformed) printf '<html>Fehler</html>\n' ;;
         newer) printf 'version="9.9-999"\n' ;;
-        current) printf 'version="1.0-700"\n' ;;
+        current|compare-fail) printf 'version="1.0-700"\n' ;;
         *) return 99 ;;
     esac
 }
 dpkg() {
     [[ $# -eq 4 && "$1" == --compare-versions && "$3" == gt ]] || return 99
+    [[ "${MOCK_UPDATE}" != compare-fail ]] || return 2
     [[ "$2" == 9.9-999 ]]
 }
 date() {
@@ -169,6 +170,7 @@ rsync() {
 chown() {
     [[ $# -eq 4 && "$1" == -R && "$2" == -- && "${4%/}" == "${MOCK_DEST}" ]] || return 99
     if [[ "${MOCK_CHOWN}" == fail ]]; then printf 'SIMULATED_CHOWN_FAILURE\n' >&2; return 12; fi
+    : > "${MOCK_CASE}/chown-complete"
 }
 cp() {
     [[ $# -eq 4 && "$1" == -p && "$2" == -- && "$3" == "${MOCK_CASE}/"* && "${4%/}" == "${MOCK_DEST}" ]] || return 99
@@ -180,6 +182,12 @@ cp() {
     command cp "$@"
 }
 mv() {
+    if [[ $# -eq 4 && "$1 $2" == '-fT --' && "$3" == "${MOCK_BACKUP}/.paperless-preflight."*/source && "$4" == "${3%/*}/target" ]]; then
+        [[ "${MOCK_PREFLIGHT}" != rename-fail ]] || { printf 'SIMULATED_PREFLIGHT_RENAME_FAILURE\n' >&2; return 14; }
+        command mv "$@" || return
+        [[ "${MOCK_PREFLIGHT}" != readback-fail ]] || printf 'corrupt\n' > "$4"
+        return 0
+    fi
     [[ $# -eq 4 && "$1" == -fT && "$2" == -- && "$3" == "${MOCK_DEST}/.postgres-dump.sql."* && "$4" == "${MOCK_DEST}/postgres-dump.sql" ]] || return 99
     if [[ "${MOCK_MOVE}" == fail ]]; then printf 'SIMULATED_RENAME_FAILURE\n' >&2; return 14; fi
     command mv "$@"
@@ -203,10 +211,16 @@ mkdir() {
 }
 rm() {
     # Vor jeder echten Testlöschung den aufgelösten Pfad auf den isolierten Testbereich begrenzen.
+    if [[ $# -eq 4 && "$1 $2" == '-f --' && "$3" == "${MOCK_BACKUP}/.paperless-preflight."*/source && "$4" == "${3%/*}/target" ]]; then
+        [[ "$(realpath -m -- "$3")" == "${test_root}/"* && "$(realpath -m -- "$4")" == "${test_root}/"* ]] || return 99
+        [[ "${MOCK_PREFLIGHT}" != cleanup-fail ]] || { printf 'SIMULATED_PREFLIGHT_CLEANUP_FAILURE\n' >&2; return 17; }
+        command rm "$@"
+        return $?
+    fi
     if [[ $# -eq 3 && "$1" == -f && "$2" == -- && "$3" == "${MOCK_DEST}/.postgres-dump.sql."* ]]; then
         [[ "$(realpath -m -- "$3")" == "${test_root}/"* && ! -L "$3" ]] || return 99
         command rm -f -- "$3"
-        return
+        return $?
     fi
     [[ $# -eq 3 && "$1" == -rf && "$2" == -- && -d "$3" && ! -L "$3" ]] || return 99
     local resolved_target resolved_backup
@@ -217,7 +231,62 @@ rm() {
     if [[ "${MOCK_DELETE}" == fail ]]; then printf 'SIMULATED_DELETE_FAILURE\n' >&2; return 13; fi
     command rm -rf -- "${resolved_target}"
 }
-export -f wget dpkg date docker rsync chown cp mv tee mkdir rm
+command() {
+    if [[ "${1:-}" == -v && " ${MOCK_MISSING:-} " == *" $2 "* ]]; then return 1; fi
+    builtin command "$@"
+}
+realpath() {
+    [[ "${MOCK_CAPABILITY:-}" != realpath || "$*" != '-m -- /' ]] || return 2
+    command realpath "$@"
+}
+stat() {
+    [[ "${MOCK_CAPABILITY:-}" != stat || "$*" != '-c %h -- /' ]] || { printf 'unsupported\n'; return 0; }
+    command stat "$@"
+}
+find() {
+    [[ "${MOCK_CAPABILITY:-}" != find || "$*" != '/ -maxdepth 0 -mtime +0 -print' ]] || return 2
+    command find "$@"
+}
+mktemp() {
+    if [[ "${MOCK_PREFLIGHT:-}" == create-fail && "${*: -1}" == "${MOCK_BACKUP}/.paperless-preflight."* ]]; then
+        printf 'SIMULATED_PREFLIGHT_WRITE_DENIED\n' >&2
+        return 18
+    fi
+    command mktemp "$@"
+}
+findmnt() {
+    printf '%q ' "$@" >> "${MOCK_CASE}/findmnt.log"
+    printf '\n' >> "${MOCK_CASE}/findmnt.log"
+    [[ "$1 $2 $3 $4 $5" == '--kernel --noheadings --raw --output ID' ]] || return 99
+    local changed=false dump_candidate
+    [[ ! -f "${MOCK_BACKUP}/Protokoll_der_letzten_Sicherung.log" ]] || changed=true
+    if [[ "${MOCK_TARGET_MOUNT}" == disappear && "${changed}" == true ]]; then return 1; fi
+    if [[ "${MOCK_TARGET_MOUNT}" == after-export && -f "${MOCK_EXPORT_HOST}/document.txt" ]]; then return 1; fi
+    if [[ "${MOCK_TARGET_MOUNT}" == after-dump ]]; then
+        for dump_candidate in "${MOCK_DEST}"/.postgres-dump.sql.*; do [[ ! -s "${dump_candidate}" ]] || return 1; done
+    fi
+    if [[ "${MOCK_TARGET_MOUNT}" == before-cleanup && -f "${MOCK_CASE}/chown-complete" ]]; then return 1; fi
+    if [[ "$6" == --mountpoint ]]; then
+        [[ $# -eq 11 && "$7" == "${MOCK_EXPECTED_MOUNT}" && "$8" == --source && "$9" == "${MOCK_EXPECTED_SOURCE}" && "${10} ${11}" == '--options rw' ]] || return 99
+        if [[ "${MOCK_TARGET_MOUNT}" == mountpoint-removed ]]; then
+            [[ "${MOCK_EXPECTED_MOUNT}" == "${MOCK_CASE}/Gone medium" ]] || return 99
+            command rmdir -- "${MOCK_EXPECTED_MOUNT}" || return 99
+        fi
+        case "${MOCK_TARGET_MOUNT}" in
+            missing|wrong-source|readonly|query-fail) return 1 ;;
+            empty) return 0 ;;
+            multiple) printf '1234\n5678\n'; return 0 ;;
+            malformed) printf 'not-an-id\n'; return 0 ;;
+        esac
+    elif [[ "$6" == --target ]]; then
+        [[ $# -eq 7 && -e "$7" && "$7" == "${MOCK_CASE}"* ]] || return 99
+        [[ "${MOCK_TARGET_MOUNT}" != nested ]] || { printf '5678\n'; return 0; }
+    else
+        return 99
+    fi
+    if [[ "${MOCK_TARGET_MOUNT}" == remounted && "${changed}" == true ]]; then printf '5678\n'; else printf '1234\n'; fi
+}
+export -f wget dpkg date docker rsync chown cp mv tee mkdir rm command realpath stat find mktemp findmnt
 
 prepare_case() {
     case_root="${test_root}/$1"
@@ -232,6 +301,8 @@ prepare_case() {
     export MOCK_POSTGRES_ID=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
     export MOCK_EXPORT_HOST="${project}/export" MOCK_EXPORT_CONTAINER=/usr/src/paperless/export
     export MOCK_MOUNT=ok MOCK_ENDPOINT=unix:///var/run/docker.sock
+    export MOCK_MISSING='' MOCK_CAPABILITY='' MOCK_PREFLIGHT=ok MOCK_TARGET_MOUNT=ok
+    export MOCK_EXPECTED_MOUNT="${case_root}" MOCK_EXPECTED_SOURCE=UUID=test-usb
     unset DOCKER_HOST DOCKER_CONTEXT COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_ENV_FILES
     history="$2"
     destination="${backup}"
@@ -764,5 +835,184 @@ for remote_mode in host context; do
     assert_log 'lokaler Docker-Daemon mit Unix-Socket'
     pass "Entfernter Docker-Daemon vor Export abgewiesen: ${remote_mode}"
 done
+
+for missing in dirname date realpath stat mkdir rmdir tee docker ls rsync mktemp mv cp chown rm find cat; do
+    prepare_case "missing-${missing}" 30
+    printf 'Vorheriges Protokoll\n' > "${backup}/Protokoll_der_letzten_Sicherung.log"
+    export MOCK_MISSING="${missing}"
+    if run_backup; then fail "Fehlendes Pflichtprogramm akzeptiert: ${missing}"; fi
+    assert_log "Benötigte Programme fehlen: ${missing}"
+    assert_no_export_started
+    assert_absent "${destination}"
+    [[ "$(< "${backup}/Protokoll_der_letzten_Sicherung.log")" == 'Vorheriges Protokoll' ]] || fail 'Vorprüfung überschreibt altes Protokoll'
+    pass "Fehlendes Pflichtprogramm vor Schreibzugriffen erkannt: ${missing}"
+done
+
+for optional in wget grep cut dpkg findmnt; do
+    prepare_case "missing-optional-${optional}" 0
+    export MOCK_MISSING="${optional}"
+    run_backup || fail "Optionales Programm verhindert Backup: ${optional}"
+    assert_backup
+    [[ "${optional}" == findmnt ]] || assert_saved_log 'Die Updateprüfung wird übersprungen'
+    assert_absent "${case_root}/findmnt.log"
+    pass "Optionales Programm blockiert Backup nicht: ${optional}"
+done
+prepare_case update-comparison-fails 0
+export MOCK_UPDATE=compare-fail
+run_backup || fail 'Fehler im Versionsvergleich verhindert Backup'
+assert_saved_log 'Der Versionsvergleich ist fehlgeschlagen'
+assert_backup
+pass 'Fehlgeschlagener Versionsvergleich wird als Hinweis protokolliert'
+
+for capability in realpath stat find; do
+    prepare_case "unsupported-${capability}" 30
+    export MOCK_CAPABILITY="${capability}"
+    if run_backup; then fail "Ungeeignetes Programm akzeptiert: ${capability}"; fi
+    assert_log 'Vorprüfungsfehler:'
+    assert_no_export_started
+    assert_absent "${destination}"
+    pass "Erforderliche Programmoptionen geprüft: ${capability}"
+done
+
+for probe_failure in create-fail rename-fail readback-fail cleanup-fail; do
+    prepare_case "write-probe-${probe_failure}" 30
+    printf 'Vorheriges Protokoll\n' > "${backup}/Protokoll_der_letzten_Sicherung.log"
+    make_version 2020-01-01T00-00-00 yes 45
+    export MOCK_PREFLIGHT="${probe_failure}"
+    if run_backup; then fail "Fehlgeschlagener Schreibtest akzeptiert: ${probe_failure}"; fi
+    assert_log 'Vorprüfungsfehler:'
+    assert_no_export_started
+    assert_absent "${destination}"
+    assert_file "${backup}/2020-01-01T00-00-00/payload.txt"
+    [[ "$(< "${backup}/Protokoll_der_letzten_Sicherung.log")" == 'Vorheriges Protokoll' ]] || fail 'Schreibtest überschreibt altes Protokoll'
+    if [[ "${probe_failure}" != cleanup-fail ]]; then
+        for probe_path in "${backup}"/.paperless-preflight.*; do assert_absent "${probe_path}"; done
+    fi
+    pass "Schreibtestfehler vor Export, altes Protokoll erhalten: ${probe_failure}"
+done
+
+for invalid in source-only mount-only relative root equal outside missing-dir control; do
+    prepare_case "invalid-target-${invalid}" 0
+    set_config backup_mountpoint "${case_root}"
+    set_config backup_mount_source UUID=test-usb
+    case "${invalid}" in
+        source-only) set_config backup_mountpoint '' ;;
+        mount-only) set_config backup_mount_source '' ;;
+        relative) set_config backup_mountpoint relative/path ;;
+        root) set_config backup_mountpoint / ;;
+        equal) set_config backup_mountpoint "${backup}" ;;
+        outside) set_config backup_mountpoint "${project}" ;;
+        missing-dir) set_config backup_mountpoint "${case_root}/missing" ;;
+        control) set_config backup_mount_source $'server:/share\nother' ;;
+    esac
+    if run_backup; then fail "Ungültiger Zielschutz akzeptiert: ${invalid}"; fi
+    assert_log 'Konfigurationsfehler:'
+    assert_no_export_started
+    assert_absent "${backup}/Protokoll_der_letzten_Sicherung.log"
+    pass "Ungültige Angaben zum Sicherungsmedium abgewiesen: ${invalid}"
+done
+
+for mount_failure in missing wrong-source readonly query-fail empty multiple malformed nested; do
+    prepare_case "target-${mount_failure}" 30
+    set_config backup_mountpoint "${case_root}"
+    set_config backup_mount_source UUID=test-usb
+    printf 'Vorheriges Protokoll\n' > "${backup}/Protokoll_der_letzten_Sicherung.log"
+    export MOCK_TARGET_MOUNT="${mount_failure}"
+    if run_backup; then fail "Ungeeignetes Sicherungsmedium akzeptiert: ${mount_failure}"; fi
+    assert_log 'Vorprüfungsfehler:'
+    assert_no_export_started
+    assert_absent "${destination}"
+    [[ "$(< "${backup}/Protokoll_der_letzten_Sicherung.log")" == 'Vorheriges Protokoll' ]] || fail 'Mountprüfung überschreibt altes Protokoll'
+    pass "Sicherungsmedium vor Schreibzugriffen abgewiesen: ${mount_failure}"
+done
+
+prepare_case target-missing-findmnt 0
+set_config backup_mountpoint "${case_root}"
+set_config backup_mount_source UUID=test-usb
+export MOCK_MISSING=findmnt
+if run_backup; then fail 'Aktiver Mountschutz ohne findmnt akzeptiert'; fi
+assert_log 'Benötigte Programme fehlen: findmnt'
+assert_no_export_started
+pass 'findmnt ist nur bei eingeschaltetem Zielschutz erforderlich'
+
+prepare_case target-absent-new-directory 0
+set_config backup_mountpoint "${case_root}"
+set_config backup_mount_source UUID=test-usb
+set_config backup_dir "${case_root}/not-created/backup"
+export MOCK_TARGET_MOUNT=missing
+if run_backup; then fail 'Fehlendes Sicherungsmedium akzeptiert'; fi
+assert_absent "${case_root}/not-created"
+assert_no_export_started
+pass 'Fehlendes Medium führt auch nicht zur Anlage eines neuen Backup-Ordners'
+
+for source_kind in uuid smb nfs; do
+    prepare_case "target-success-${source_kind}" 30
+    case "${source_kind}" in
+        uuid) export MOCK_EXPECTED_SOURCE=UUID=test-usb ;;
+        smb) export MOCK_EXPECTED_SOURCE='//server/Backup with spaces' ;;
+        nfs) export MOCK_EXPECTED_SOURCE='server:/Backup with spaces' ;;
+    esac
+    set_config backup_mountpoint "${case_root}"
+    set_config backup_mount_source "${MOCK_EXPECTED_SOURCE}"
+    make_version 2020-01-01T00-00-00 yes 45
+    run_backup || { cat -- "${case_root}/output.log"; fail "Erlaubtes Sicherungsmedium: ${source_kind}"; }
+    assert_backup
+    assert_absent "${backup}/2020-01-01T00-00-00"
+    for probe_path in "${backup}"/.paperless-preflight.*; do assert_absent "${probe_path}"; done
+    pass "Sicherung und Bereinigung auf geprüftem Medium: ${source_kind}"
+done
+
+for change in disappear remounted; do
+    prepare_case "target-changed-${change}" 30
+    set_config backup_mountpoint "${case_root}"
+    set_config backup_mount_source UUID=test-usb
+    export MOCK_TARGET_MOUNT="${change}"
+    make_version 2020-01-01T00-00-00 yes 45
+    if run_backup; then fail 'Mountwechsel während des Laufs akzeptiert'; fi
+    assert_no_export_started
+    assert_saved_log 'FEHLER: Datensicherung nicht erfolgreich'
+    assert_file "${backup}/2020-01-01T00-00-00/payload.txt"
+    assert_absent "${destination}/.paperless-ngx-backup"
+    pass "Erneute Mountprüfung vor Export erkennt Änderung: ${change}"
+done
+
+prepare_case target-new-subdirectories 0
+export MOCK_BACKUP="${case_root}/New backup/with/subdirectories" MOCK_DEST="${case_root}/New backup/with/subdirectories"
+backup="${MOCK_BACKUP}"
+destination="${MOCK_DEST}"
+set_config backup_dir "${backup}"
+set_config backup_mountpoint "${case_root}"
+set_config backup_mount_source UUID=test-usb
+run_backup || { cat -- "${case_root}/output.log"; fail 'Neues Ziel auf geprüftem Medium'; }
+assert_backup
+pass 'Fehlende Unterverzeichnisse erst auf geprüftem Medium angelegt'
+
+for stage in after-export after-dump before-cleanup; do
+    prepare_case "target-lost-${stage}" 30
+    set_config backup_mountpoint "${case_root}"
+    set_config backup_mount_source UUID=test-usb
+    make_version 2020-01-01T00-00-00 yes 45
+    export MOCK_TARGET_MOUNT="${stage}"
+    if run_backup; then fail "Mountverlust nicht erkannt: ${stage}"; fi
+    assert_saved_log 'FEHLER: Datensicherung nicht erfolgreich'
+    assert_file "${backup}/2020-01-01T00-00-00/payload.txt"
+    assert_absent "${destination}/.paperless-ngx-backup"
+    assert_absent "${case_root}/deleted.log"
+    if [[ "${stage}" == after-export ]]; then assert_absent "${destination}/export"; fi
+    if [[ "${stage}" == after-dump ]]; then assert_absent "${destination}/postgres-dump.sql"; fi
+    pass "Mountverlust verhindert folgende Schreib-/Löschschritte: ${stage}"
+done
+
+prepare_case target-mountpoint-removed 0
+export MOCK_EXPECTED_MOUNT="${case_root}/Gone medium" MOCK_TARGET_MOUNT=mountpoint-removed
+mkdir -- "${MOCK_EXPECTED_MOUNT}"
+set_config backup_mountpoint "${MOCK_EXPECTED_MOUNT}"
+set_config backup_mount_source UUID=test-usb
+set_config backup_dir "${MOCK_EXPECTED_MOUNT}/backup"
+if run_backup; then fail 'Zwischen Abfragen verschwundener Mountpfad akzeptiert'; fi
+assert_log 'Der erwartete Mountpfad ist nicht mehr verfügbar'
+assert_absent "${MOCK_EXPECTED_MOUNT}"
+assert_no_export_started
+pass 'Verschwundener Mountpfad wird nicht neu angelegt'
 
 printf 'Alle Regressionstests erfolgreich.\n'

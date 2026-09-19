@@ -1,5 +1,9 @@
 Paperless-ngx Backup-Script Release Notes
 Noch nicht veröffentlicht
+ - Vorprüfungen für Pflichtprogramme und benötigte Dateiwerkzeug-Optionen ergänzt; ein temporärer Schreib-, Lese-, Umbenennungs- und Löschtest erfolgt vor dem Export und dem Ersetzen des bisherigen Protokolls.
+ - Optionaler Schutz externer Sicherungsziele über Mountpunkt und erwartete Quelle (z. B. UUID oder Freigabe): Prüfung vor Schreibzugriffen und erneut vor wichtigen Sicherungs- und Löschschritten.
+ - Fehlende Update-Helfer und Fehler beim Versionsvergleich werden als Hinweis protokolliert und verhindern das Backup nicht.
+ - Anleitung und Regressionstests für Vorprüfungen, externe Sicherungsmedien und Mountwechsel ergänzt.
  - Compose-/Portainer-Erweiterung: Betriebsarten auto, compose und container sowie explizite Compose-Dateien, Variablendateien und Projektnamen ergänzt.
  - Compose wird auf die ausgewählten lokalen Dateien begrenzt; fehlgeschlagene oder mehrdeutige Abfragen wechseln nicht mehr stillschweigend den Container.
  - Beide laufenden Container werden vor dem Export geprüft und anschließend über ihre IDs angesprochen.
