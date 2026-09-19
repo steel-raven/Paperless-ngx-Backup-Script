@@ -10,6 +10,9 @@ Mithilfe des hier vorgestellten Skripts sollen der Export und die anschließende
 - **Erstellung eines Datensicherungsprotokolls**  
 Zunächst wird im angegebenen Datensicherungsziel ein neues Protokoll erstellt, das im Folgenden mit Informationen zum aktuellen Sicherungsverlauf beschrieben wird. Dabei wird das mitlaufende Protokoll auch in Echtzeit auf der Kommandozeile ausgegeben. 
 
+- **Prüfung auf Skript-Updates**
+Vor der Sicherung wird die aktuelle Skriptversion auf GitHub abgefragt. Kann diese Prüfung nicht abgeschlossen werden, beispielsweise ohne Internetverbindung, erscheint ein Hinweis im Protokoll und die lokale Datensicherung wird fortgesetzt.
+
 - **Ausführung der integrierten Exportfunktion von Paperless-ngx**  
 Zum Exportieren vorhandener Datenbankinhalte, Metadaten, Benutzerprofile und -einstellungen etc. bietet Paperless-ngx mit dem `document_exporter` eine eigene Funktion an. Vor der Ausführung dieser Funktion wird zunächst geprüft, ob der Paperless-ngx-Container läuft, da der Export sonst nicht ausgeführt werden kann. Die exportierten Daten werden im Unterverzeichnis `/export` des Paperless-ngx-Verzeichnisses in einer ZIP-Datei mit der Syntax `export-YYYY-MM-DD.zip` abgelegt. 
 
@@ -20,19 +23,25 @@ Nach Abschluss des Exports werden die Daten aus dem Ordner `/export` in das loka
 Zum Exportieren der eigentlichen Datenbankinhalte bietet PostgreSQL mit `pg_dump` eine eigene Funktion an. Dabei werden die zu exportierenden Datenbankinhalte direkt ins lokale Datensicherungsziel übertragen und in einer Datei mit der Dateiendung `.sql` gespeichert. Vor der Ausführung dieser Funktion wird zunächst geprüft, ob der PostgreSQL Container von Paperless-ngx läuft, da der Export sonst nicht ausgeführt werden kann.
  
 - **Sicherung des YAML- bzw. Docker-Compose-Datei**  
-Befindet sich im Docker-Projekt-Verzeichnis von Paperless-ngx eine YAML- bzw. Docker-Compose-Datei, wird diese ins lokale Datensicherungsziel übertragen und als Datei mit der Endung `.yaml` gespeichert. 
+Alle Dateien mit der Endung `.yaml` oder `.yml` direkt im Docker-Projekt-Verzeichnis werden unter ihrem ursprünglichen Namen gesichert. Dazu gehören beispielsweise `compose.yaml`, `docker-compose.yml` und `compose.override.yaml`, ebenso versteckte Dateien. Groß- und Kleinschreibung der Endung spielt keine Rolle.
 
 - **Sicherung des ENV- bzw. Environment-Datei**  
-Befindet sich im Docker-Projekt-Verzeichnis von Paperless-ngx eine ENV-Datei, wird diese ins lokale Datensicherungsziel übertragen und als Datei mit der Endung `.env` gespeichert.
+Direkt im Docker-Projekt-Verzeichnis werden `.env`, `.env.*`, `*.env` und `*.env.*` unter ihrem ursprünglichen Namen gesichert, beispielsweise `.env.production`, `docker-compose.env` und `paperless.env.local`. Auch versteckte Dateien und andere Groß-/Kleinschreibungen werden berücksichtigt. Dateien in Unterverzeichnissen, außerhalb des Projektverzeichnisses oder mit frei gewählten Namen ohne diese Muster müssen separat gesichert werden; Verweise wie `env_file` werden nicht ausgewertet.
 
 - **Anpassen der Ordner- und Dateirechte im Sicherungsziel**  
 Abschließend werden die Ordner- und Dateirechte im Datensicherungsziel noch an die angegebenen Benutzer- und Gruppenrechte des Paperless-ngx-Verzeichnisses angepasst.
 
 - **Erstellen von Versionen (Bei Bedarf)**  
-Wird eine Datensicherung mit Versionsständen verwendet, werden im Datensicherungsziel Versionsordner im Format "YYYY-MM-DDTHH-MM-SS" angelegt. Versionsordner werden nach Ablauf einer vom Benutzer festgelegten Zeit in Tagen automatisch aus dem Datensicherungsziel gelöscht.
+Wird eine Datensicherung mit Versionsständen verwendet, werden im Datensicherungsziel neue Versionsordner im Format "YYYY-MM-DDTHH-MM-SS" angelegt. Ein bereits vorhandener Ordner gleichen Namens führt zum Abbruch, damit fremde oder frühere Daten nicht übernommen werden.
+
+Nach erfolgreichem Dokumentexport und Datenbank-Dump wird der neue Versionsordner mit der Datei `.paperless-ngx-backup` gekennzeichnet. Die automatische Bereinigung erfasst ausschließlich direkte Unterordner mit dem genannten Zeitstempelformat und der passenden Kennzeichnung. Der aktuelle Versionsordner, symbolische Links und unmarkierte Ordner bleiben erhalten. Ist der aktuelle Export oder Dump unvollständig, findet keine Bereinigung statt.
+
+**Vorhandene Sicherungen aus älteren Skriptversionen werden nicht automatisch nachträglich gekennzeichnet oder gelöscht.** Sie können nach eigener Prüfung manuell bereinigt werden. Kennzeichnungsdateien dürfen nicht in fremde Ordner kopiert werden. Wie bisher richtet sich das Alter nach der Änderungszeit des Versionsordners (`find -mtime +N`, volle 24-Stunden-Zeiträume), nicht nach seinem Namen.
 
 ## Installationshinweise
 Mit Hilfe des Kommandozeilenprogramms `curl` kann die Shell-Skript-Datei **Paperless-ngx-Backup-Script.sh** einfach über ein Terminalprogramm deiner Wahl heruntergeladen werden. Als Speicherort bietet sich das eigene Benutzer-Home-Verzeichnis an, es kann jedoch auch jedes andere erreichbare Verzeichnis verwendet werden. Wechsle in das von dir gewählte Verzeichnis. Führe dann den folgenden Befehl aus. Damit wird die Skriptdatei in das ausgewählte Verzeichnis heruntergeladen.
+
+Projekt-, Skript- und Sicherungsverzeichnisse dürfen Leerzeichen enthalten. Pfade beim manuellen Aufruf und in Cron-Einträgen ebenfalls in Anführungszeichen setzen, zum Beispiel `sudo "/volume1/Meine Skripte/Paperless-ngx-Backup-Script.sh"`.
 
 **Download der Shell-Skript-Datei Paperless-ngx-Backup-Script.sh**
 
@@ -108,6 +117,15 @@ Die integrierte Exportfunktion von Paperless-ngx wird ausgeführt. Bitte warten.
 
 ## Versionsgeschichte
 - Details zur Versionsgeschichte findest du in der Datei [CHANGELOG](CHANGELOG)
+
+## Regressionstests
+Die Tests prüfen Dateinamen, Pfade mit Leerzeichen, fehlgeschlagene Update-Abfragen und die Grenzen der Versionsbereinigung in temporären Testverzeichnissen:
+
+```bash
+bash tests/regression.sh
+```
+
+Docker, Netzwerkzugriffe und Änderungen von Besitzrechten werden simuliert. Dafür sind weder eine laufende Paperless-ngx-Installation noch Root-Rechte erforderlich. Die Tests ersetzen keinen vollständigen Sicherungs- und Wiederherstellungstest auf dem NAS. Tests für symbolische Links werden ausdrücklich als übersprungen gemeldet, falls in der Testumgebung keine solchen Links angelegt werden können.
 
 ## Hilfe und Diskussion
 - Hilfe und Diskussionen gerne über das UGREEN Forum - DACH Community [Paperless-ngx Backup-Script](https://ugreen-forum.de/forum/thread/2184-paperless-ngx-backup-script/)

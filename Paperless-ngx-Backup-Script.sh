@@ -66,17 +66,22 @@ datetime_dir() { date +"%Y-%m-%dT%H-%M-%S"; }
 # Absoluten Pfad des Shell-Skripts ermitteln
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 
-# Wenn die Versionierung aktiviert ist, leite das Datensicherungsziel in einen Versionsordner um
-[[ "${version_history}" =~ ^[1-9][0-9]*$ ]] && backup_dir="${backup_dir}/$(datetime_dir)"
+# Datensicherungsziel erstellen und seinen absoluten Pfad festhalten
+mkdir -p -- "${backup_dir}"
+backup_root="$(cd -- "${backup_dir}" && pwd -P)"
+backup_dir="${backup_root}"
 
-# Falls noch nicht vorhanden, Datensicherungsziel erstellen
-[[ ! -d "${backup_dir}" ]] && mkdir -p "${backup_dir}"
+# Versionsordner neu anlegen; einen bereits vorhandenen Ordner niemals übernehmen
+if [[ "${version_history}" =~ ^[1-9][0-9]*$ ]]; then
+    backup_dir="${backup_root%/}/$(datetime_dir)"
+    mkdir -- "${backup_dir}"
+fi
 
 # Falls das Datensicherungsziel exisitiert...
 if [[ -d "${backup_dir}" ]]; then
 
     # Pfad zur Protokolldatei festlegen
-    [[ "${version_history}" =~ ^[1-9][0-9]*$ ]] && logfile="${backup_dir%/*}/${logfile_name}" || logfile="${backup_dir}/${logfile_name}"
+    logfile="${backup_root%/}/${logfile_name}"
 
     # Erstelle/überschreibe Protokolldatei
     : > "${logfile}"
@@ -88,9 +93,8 @@ if [[ -d "${backup_dir}" ]]; then
     # Beginn des Protokolls...
 
     # Prüfen, ob das verwendete Skript aktuell ist oder ob ein Update auf GitHub verfügbar ist
-    git_version=$(wget --no-check-certificate --timeout=60 --tries=1 -q -O- "https://raw.githubusercontent.com/toafez/Paperless-ngx-Backup-Script/refs/heads/main/Paperless-ngx-Backup-Script.sh" | grep ^version= | cut -d '"' -f2)		
-    if [ -n "${git_version}" ] && [ -n "${version}" ]; then
-        if dpkg --compare-versions ${git_version} gt ${version}; then
+    if git_version=$(wget --no-check-certificate --timeout=60 --tries=1 -q -O- "https://raw.githubusercontent.com/toafez/Paperless-ngx-Backup-Script/refs/heads/main/Paperless-ngx-Backup-Script.sh" | grep '^version=' | cut -d '"' -f2) && [[ -n "${git_version}" ]]; then
+        if dpkg --compare-versions "${git_version}" gt "${version}"; then
             log "${hr}"
             log "WICHTIGER HINWEIS:"
             log "Auf GitHub steht ein Update für dieses Skript zur Verfügung."
@@ -99,10 +103,16 @@ if [[ -d "${backup_dir}" ]]; then
             log "${hr}"
             log ""
         fi
+    else
+        log " - Hinweis: Die Updateprüfung konnte nicht abgeschlossen werden (z. B. keine Internetverbindung)."
+        log "   Die Updateprüfung wird übersprungen; die Datensicherung wird fortgesetzt."
     fi
 
     # Wenn das Hauptverzeichnis des Docker-Projekts existiert...
     if [[ -d "${project_dir}" ]]; then
+
+        # Nur nach erfolgreichem Export und Datenbank-Dump alte Versionen bereinigen
+        backup_complete=true
 
         # Prüfen, welchem Benutzer bzw. welcher Gruppe das Docker-Projekt Verzeichnis gehört
         dir_user=$(stat -c '%U' "${project_dir}")
@@ -141,24 +151,27 @@ if [[ -d "${backup_dir}" ]]; then
             cd "${script_dir}"
 
             # Prüfen, ob Dokumente im Paperless-NGX-Exportverzeichnis vorhanden sind
-            if [[ -n "$(ls -A ${project_dir}/export)" ]]; then
+            if [[ -n "$(ls -A -- "${project_dir}/export")" ]]; then
 
                 # Sichern aller exportierten Dokumente aus dem Paperless-NGX-Exportverzeichnis ins Datensicherungsziel
-                rsync -a --delete ${project_dir}/export ${backup_dir}
+                rsync -a --delete -- "${project_dir}/export" "${backup_dir}"
 
                 # Prüfen, ob Dokumente im Datensicherungsziel vorhanden sind
                 if [[ -d "${backup_dir}/export" ]]; then
                     log " - Das Paperless-NGX-Exportverzeichnis [ /export ] wurde gesichert."
                 else
+                    backup_complete=false
                     log " - Die Sicherung des Paperless-NGX-Exportverzeichnises war nicht möglich."
                 fi
             else
+                backup_complete=false
                 log " - Die Bereitstellung der Dokumente im Paperless-NGX-Exportverzeichnis war nicht möglich."
             fi
 
             # Variable des Docker-Befehls leeren
             docker_command=
         else
+            backup_complete=false
             log " - Die Sicherung des Paperless-NGX-Exportverzeichnises konnte nicht durchgeführt"
             log "   werden, da der Container aktuell nicht ausgeführt wird!"
         fi
@@ -188,21 +201,28 @@ if [[ -d "${backup_dir}" ]]; then
             if [[ -s "${backup_dir}/postgres-dump.sql" ]]; then
                 log " - Der Dump der PostgreSQL-Datenbank wurde in der Datei [ postgres-dump.sql ] gesichert."
             else
+                backup_complete=false
                 log " - Beim Sichern des PostgreSQL-Datenbank-Dumps ist ein Fehler aufgetreten!"
             fi
 
             # Variable des Docker-Befehls leeren
             docker_command=
         else
+            backup_complete=false
             log " - Die Erstellung eines Dumps der PostgreSQL-Datenbank konnte nicht durchgeführt"
             log "   werden, da der Container aktuell nicht ausgeführt wird!"
         fi
 
-        # Prüfen, ob es eine oder mehrere YAML-Dateien im Docker-Projektverzeichnis gibt
+        # Übliche YAML- und ENV-Dateinamen im Projektverzeichnis erfassen, auch versteckte Dateien
         yamlfiles=()
-        for yaml in "${project_dir}"/*.yaml; do
-            [[ -f ${yaml} ]] || continue
-            yamlfiles+=("${yaml}")
+        envfiles=()
+        for config_file in "${project_dir}"/* "${project_dir}"/.[!.]* "${project_dir}"/..?*; do
+            [[ -f "${config_file}" ]] || continue
+            config_name="${config_file##*/}"
+            case "${config_name,,}" in
+                *.yaml|*.yml) yamlfiles+=("${config_file}") ;;
+                .env|.env.*|*.env|*.env.*) envfiles+=("${config_file}") ;;
+            esac
         done
 
         # Falls ja, kopiere bzw. überschreibe die YAML-Datei(en) ins Datensicherungsziel
@@ -211,7 +231,7 @@ if [[ -d "${backup_dir}" ]]; then
         else
             for yamlfile in "${yamlfiles[@]}"; do
                 cp -p -- "${yamlfile}" "${backup_dir}/"
-                if [[ -s "${backup_dir}/${yamlfile##*/}" ]]; then
+                if [[ -f "${backup_dir}/${yamlfile##*/}" ]]; then
                     log " - Die YAML-Datei [ ${yamlfile##*/} ] wurde gesichert."
                 else
                     log " - Beim Sichern der YAML-Datei [ ${yamlfile##*/} ] ist ein Fehler aufgetreten!"
@@ -219,20 +239,13 @@ if [[ -d "${backup_dir}" ]]; then
             done
         fi
 
-        # Prüfen, ob es eine oder mehrere ENV-Dateien im Docker-Projektverzeichnis gibt
-        envfiles=()
-        for env in "${project_dir}"/*.env; do
-            [[ -f "${env}" ]] || continue
-            envfiles+=("${env}")
-        done
-
         # Falls ja, kopiere bzw. überschreibe die ENV-Datei(en) ins Datensicherungsziel
         if [[ "${#envfiles[@]}" -eq 0 ]]; then
             log " - Es wurde keine ENV-Datei gefunden."
         else
             for envfile in "${envfiles[@]}"; do
                 cp -p -- "${envfile}" "${backup_dir}/"
-                if [[ -s "${backup_dir}/${envfile##*/}" ]]; then
+                if [[ -f "${backup_dir}/${envfile##*/}" ]]; then
                     log " - Die ENV-Datei [ ${envfile##*/} ] wurde gesichert."
                 else
                     log " - Beim Sichern der ENV-Datei [ ${envfile##*/} ] ist ein Fehler aufgetreten!"
@@ -241,14 +254,27 @@ if [[ -d "${backup_dir}" ]]; then
         fi
 
         # Passe Ordner- und Dateireche im Sicherungsziel an
-        chown -R ${dir_user}:${dir_group} ${backup_dir}
+        chown -R -- "${dir_user}:${dir_group}" "${backup_dir}"
         log " - Die Ordner- und Dateirechte im Datensicherungsziel wurden auf [ ${dir_user}:${dir_group} ] gesetzt."
 
-        # Backup-Verzeichnisse löschen, die älter sind als ${version_history} Tage (nicht rekursiv)
+        # Nur eindeutig gekennzeichnete, abgeschlossene Versionsordner automatisch löschen
         if [[ "${version_history}" =~ ^[1-9][0-9]*$ ]]; then
-            if find "${backup_dir%/*}" -maxdepth 1 -mindepth 1 -type d -mtime +"${version_history}" -print -quit | grep -q .; then
-                log " - Versionsstände, die älter als [ ${version_history} ] Tag(e) sind, wurden gelöscht."
-                find "${backup_dir%/*}" -maxdepth 1 -mindepth 1 -type d -mtime +"${version_history}" -exec rm -rf {} +
+            if [[ "${backup_complete}" == true ]]; then
+                printf 'Paperless-ngx-Backup-Script:%s\n' "${backup_dir##*/}" > "${backup_dir}/.paperless-ngx-backup"
+                for old_backup in "${backup_root%/}"/*; do
+                    [[ -d "${old_backup}" && ! -L "${old_backup}" && "${old_backup}" != "${backup_dir}" ]] || continue
+                    old_name="${old_backup##*/}"
+                    [[ "${old_name}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}$ ]] || continue
+                    marker="${old_backup}/.paperless-ngx-backup"
+                    [[ -f "${marker}" && ! -L "${marker}" ]] || continue
+                    [[ "$(cat -- "${marker}")" == "Paperless-ngx-Backup-Script:${old_name}" ]] || continue
+                    expired_backup=$(find "${old_backup}" -maxdepth 0 -type d -mtime +"${version_history}" -print)
+                    [[ -n "${expired_backup}" ]] || continue
+                    rm -rf -- "${old_backup}"
+                    log " - Versionsstand [ ${old_name} ], älter als [ ${version_history} ] Tag(e), wurde gelöscht."
+                done
+            else
+                log " - Die Versionsbereinigung wird übersprungen, da Export oder Datenbank-Dump unvollständig sind."
             fi
         fi
 

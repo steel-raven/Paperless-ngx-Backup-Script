@@ -1,4 +1,11 @@
 Paperless-ngx Backup-Script Release Notes
+Noch nicht veröffentlicht
+ - Pfade mit Leerzeichen werden bei Exportprüfung, rsync und Rechteanpassung korrekt übergeben.
+ - Eine fehlgeschlagene Update-Abfrage wird protokolliert und verhindert die lokale Sicherung nicht mehr.
+ - YAML- und ENV-Dateivarianten einschließlich .yml, .env und .env.production werden berücksichtigt.
+ - Die Versionsbereinigung löscht nur gekennzeichnete Versionsordner nach einer vollständigen Sicherung; alte unmarkierte Ordner bleiben erhalten.
+ - Isolierte Regressionstests für erfolgreiche Sicherungen und Fehlerfälle ergänzt.
+
 Version 1.0-700 vom 19.09.2026
  - In einem Kommentar wurde die Bezeichnung einer Variable berichtigt und ein Fehler in der Verarbeitung der ENV-Datei(en) korrigiert.
 
