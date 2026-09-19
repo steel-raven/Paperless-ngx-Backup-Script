@@ -122,7 +122,7 @@ case "${logfile_name}" in
     ''|.|..|*/*|*\\*|*[[:cntrl:]]*) config_error 'logfile_name muss ein einfacher Dateiname ohne Pfadbestandteile sein.' ;;
 esac
 case "${logfile_name,,}" in
-    export|postgres-dump.sql|.paperless-ngx-backup|*.yaml|*.yml|.env|.env.*|*.env|*.env.*)
+    export|postgres-dump.sql|.paperless-ngx-backup|sicherungsinfo.txt|*.yaml|*.yml|.env|.env.*|*.env|*.env.*)
         config_error 'logfile_name kollidiert mit einer Sicherungsdatei.' ;;
 esac
 for configured_path in "${project_dir}" "${backup_dir}"; do
@@ -204,6 +204,7 @@ add_config_file() {
     [[ "${resolved}" != "${backup_root}/"* ]] || config_error 'Konfigurationsquellen dürfen nicht im Sicherungsziel liegen.'
     [[ "${resolved}" != "${export_host_dir}/"* ]] || config_error 'Konfigurationsquellen dürfen nicht im Exportordner liegen; der Exporter kann dort Dateien löschen.'
     case "${name}" in export|postgres-dump.sql|.paperless-ngx-backup|"${logfile_name}") config_error "Reservierter Sicherungsname: ${name}" ;; esac
+    [[ "${name,,}" != sicherungsinfo.txt ]] || config_error "Reservierter Sicherungsname: ${name}"
     for existing in "${config_files[@]}"; do
         if [[ "${existing##*/}" == "${name}" ]]; then
             [[ "${existing}" -ef "${file}" ]] || config_error "Mehrere Konfigurationsdateien heißen ${name}; bitte eindeutige Dateinamen verwenden."
@@ -351,12 +352,20 @@ log_pid=$!
 log() { printf '%s\n' "$*"; }
 backup_step='Vorbereitung des Sicherungsziels'
 dump_tmp=
+info_tmp=
+info_published=false
 finish() {
     local status=$? log_status
     trap - EXIT
     if [[ -n "${dump_tmp}" ]]; then
         if ! check_backup_mount || ! rm -f -- "${dump_tmp}"; then
             log ' - Die temporäre Dump-Datei konnte nicht entfernt werden.'
+            [[ "${status}" -ne 0 ]] || status=1
+        fi
+    fi
+    if [[ -n "${info_tmp}" ]]; then
+        if ! check_backup_mount || ! rm -f -- "${info_tmp}"; then
+            log ' - Die temporäre Versionsübersicht konnte nicht entfernt werden.'
             [[ "${status}" -ne 0 ]] || status=1
         fi
     fi
@@ -372,11 +381,80 @@ finish() {
         printf 'FEHLER: Das Sicherungsprotokoll konnte nicht vollständig geschrieben werden.\n' >&2
         [[ "${status}" -ne 0 ]] || status=${log_status}
     fi
+    # Auch bei einem erst beim Warten erkannten Protokollfehler keinen Erfolg vortäuschen.
+    if [[ "${status}" -ne 0 && "${info_published}" == true ]]; then
+        if ! check_backup_mount || ! rm -f -- "${info_file}"; then
+            printf 'FEHLER: Die Versionsübersicht konnte nach dem Abbruch nicht entfernt werden; Sicherungsprotokoll prüfen.\n' >&2
+        fi
+    fi
     exit "${status}"
 }
 trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+# Versionsabfragen sind Zusatzinformationen. Fehlende oder unerwartete Angaben
+# werden kenntlich gemacht; ihre Standardausgabe darf keine Protokollzeilen enthalten.
+info_value() {
+    local label="$1" pattern="$2" value
+    shift 2
+    if value=$("$@") && [[ -n "${value}" && "${#value}" -le 256 && "${value}" != *[[:cntrl:]]* && "${value}" =~ ${pattern} ]]; then
+        printf '%s\n' "${value}"
+    else
+        printf ' - Hinweis: %s nicht ermittelbar; Versionsübersicht bleibt an dieser Stelle unvollständig.\n' "${label}" >&2
+        printf 'nicht ermittelbar\n'
+    fi
+}
+
+write_backup_info() {
+    local paperless_version paperless_image postgres_image server_version= dump_version= line value completed count=0
+    completed=$(date '+%Y-%m-%dT%H:%M:%S%z')
+    paperless_version=$(info_value 'Paperless-ngx-Version' '^[0-9]+\.[0-9]+\.[0-9]+([a-zA-Z0-9.+-]*)$' \
+        docker exec "${paperless_id}" python3 -B -c 'import runpy; print(runpy.run_path("/usr/src/paperless/src/paperless/version.py")["__full_version_str__"])')
+    paperless_image=$(info_value 'Paperless-ngx-Image' '^[a-zA-Z0-9][a-zA-Z0-9._:/@-]*$' \
+        docker inspect --type container --format '{{.Config.Image}}' -- "${paperless_id}")
+    postgres_image=$(info_value 'PostgreSQL-Image' '^[a-zA-Z0-9][a-zA-Z0-9._:/@-]*$' \
+        docker inspect --type container --format '{{.Config.Image}}' -- "${postgres_id}")
+
+    # Nur den begrenzten Dump-Kopf lesen, keine SQL-Inhalte ausgeben. Die beiden
+    # Versionsangaben stammen damit genau aus dem gesicherten Dump, nicht aus
+    # einer zusätzlichen Datenbankabfrage oder dem möglicherweise beweglichen Image-Tag.
+    while (( count < 64 )) && IFS= read -r -n 512 line; do
+        count=$((count + 1))
+        case "${line}" in
+            '-- Dumped from database version '*) value="${line#-- Dumped from database version }"; server_version="${value}" ;;
+            '-- Dumped by pg_dump version '*) value="${line#-- Dumped by pg_dump version }"; dump_version="${value}" ;;
+        esac
+        [[ -z "${server_version}" || -z "${dump_version}" ]] || break
+    done < "${backup_dir}/postgres-dump.sql"
+    server_version=$(info_value 'PostgreSQL-Serverversion im Dump' '^[0-9]+(\.[0-9]+)*([[:space:]]|$)' printf '%s' "${server_version}")
+    dump_version=$(info_value 'pg_dump-Version im Dump' '^[0-9]+(\.[0-9]+)*([[:space:]]|$)' printf '%s' "${dump_version}")
+
+    check_backup_mount
+    info_tmp=$(mktemp -- "${backup_dir}/.Sicherungsinfo.txt.XXXXXX")
+    # UTF-8-Text mit LF-Zeilenumbrüchen. Die Subshell hält bei Schreibfehlern
+    # die Ausgabeumleitung vom EXIT-Handler und dessen Protokollierung getrennt.
+    (
+        printf 'Paperless-ngx – Informationen zu dieser Sicherung\n\n'
+        printf 'Sicherungsbeginn: %s\n' "${backup_started}"
+        printf 'Datenübertragung abgeschlossen: %s\n' "${completed}"
+        printf 'Skriptversion: %s\n' "${version}"
+        printf 'Paperless-ngx-Version: %s\n' "${paperless_version}"
+        printf 'PostgreSQL-Serverversion (aus Dump): %s\n' "${server_version}"
+        printf 'pg_dump-Version (aus Dump): %s\n\n' "${dump_version}"
+        printf 'Paperless-ngx-Image: %s\n' "${paperless_image}"
+        printf 'PostgreSQL-Image: %s\n' "${postgres_image}"
+        printf 'Image-Namen der für Export und Dump verwendeten Container. Tags wie latest können sich ändern.\n\n'
+        printf 'Gesicherte Bestandteile:\n  export/ – Dokumentexport von Paperless-ngx\n  postgres-dump.sql – PostgreSQL-Datenbankdump\n'
+        for config_file in "${config_files[@]}"; do
+            printf '  %s – Konfigurationsdatei\n' "${config_file##*/}"
+        done
+        printf '\nDiese Übersicht hilft bei der Wiederherstellung und bei Supportfragen.\n'
+        printf 'Sie enthält keine Prüfsummen und ersetzt keinen Wiederherstellungstest.\n'
+        printf 'Den Gesamtstatus des Laufs zeigt das Sicherungsprotokoll; Zeitangaben enthalten den UTC-Versatz.\n'
+        printf 'Wiederherstellung: https://docs.paperless-ngx.com/administration/#importer\n'
+    ) > "${info_tmp}"
+}
 
 # Einen einzelnen laufenden Container ermitteln und anschließend über seine ID
 # ansprechen. Dadurch verwenden Prüfung und Export denselben Container.
@@ -481,6 +559,7 @@ if [[ -d "${backup_dir}" ]]; then
 
         # Nur nach einer vollständigen Sicherung alte Versionen bereinigen
         backup_complete=true
+        backup_started=$(date '+%Y-%m-%dT%H:%M:%S%z')
 
         # Prüfen, welchem Benutzer bzw. welcher Gruppe das Docker-Projekt Verzeichnis gehört
         backup_step='Ermittlung der Besitzrechte'
@@ -517,6 +596,21 @@ if [[ -d "${backup_dir}" ]]; then
         if [[ "${effective_mode}" == container && "${#config_files[@]}" -eq 0 ]]; then
             log ' - Hinweis: Keine lokalen Konfigurationsdateien gefunden. Portainer-Stack und separat gespeicherte Variablen über additional_config_files ergänzen.'
         fi
+
+        backup_step='Vorbereitung der Versionsübersicht'
+        info_file="${backup_dir}/Sicherungsinfo.txt"
+        [[ ! -L "${info_file}" && ( ! -e "${info_file}" || -f "${info_file}" ) ]] || { log ' - Die Versionsübersicht darf kein Link oder Verzeichnis sein.'; exit 1; }
+        if [[ -f "${info_file}" ]]; then
+            [[ "$(stat -c '%h' -- "${info_file}")" == 1 && ! "${info_file}" -ef "${BASH_SOURCE[0]}" ]] || { log ' - Die Versionsübersicht darf keine andere Datei oder das Skript ersetzen.'; exit 1; }
+            if ! IFS= read -r -n 256 info_title < "${info_file}" || [[ "${info_title}" != 'Paperless-ngx – Informationen zu dieser Sicherung' ]]; then
+                log ' - Sicherungsinfo.txt ist bereits durch eine andere oder nicht erkennbare Datei belegt.'
+                exit 1
+            fi
+        fi
+        # Ab jetzt können Sicherungsdaten verändert werden. Eine alte Übersicht
+        # vorher entfernen, damit nach einem Abbruch kein veralteter Stand vorliegt.
+        check_backup_mount
+        rm -f -- "${info_file}"
 
         # Sichern aller Dokumente in das geprüfte Exportverzeichnis
         backup_step='Prüfung des Sicherungsmediums'
@@ -598,11 +692,25 @@ if [[ -d "${backup_dir}" ]]; then
         [[ "${yaml_found}" == true ]] || log ' - Es wurde keine YAML-Datei gefunden.'
         [[ "${env_found}" == true ]] || log ' - Es wurde keine ENV-Datei gefunden.'
 
+        if [[ "${backup_complete}" == true ]]; then
+            backup_step='Erstellung der Versionsübersicht'
+            write_backup_info
+        fi
+
         # Passe Ordner- und Dateireche im Sicherungsziel an
         backup_step='Anpassung der Besitzrechte'
         check_backup_mount
         chown -R -- "${dir_user}:${dir_group}" "${backup_dir}"
         log " - Die Ordner- und Dateirechte im Datensicherungsziel wurden auf [ ${dir_user}:${dir_group} ] gesetzt."
+
+        if [[ "${backup_complete}" == true ]]; then
+            backup_step='Speicherung der Versionsübersicht'
+            check_backup_mount
+            mv -fT -- "${info_tmp}" "${info_file}"
+            info_tmp=
+            info_published=true
+            log ' - Die Versionsübersicht wurde in [ Sicherungsinfo.txt ] gesichert.'
+        fi
 
         # Nur eindeutig gekennzeichnete, abgeschlossene Versionsordner automatisch löschen
         backup_step='Versionsbereinigung'

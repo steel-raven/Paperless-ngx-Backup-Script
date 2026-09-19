@@ -30,7 +30,7 @@ assert_log() { grep -Fq -- "$1" "${case_root}/output.log" || fail "Protokolltext
 assert_saved_log() { grep -Fq -- "$1" "${backup}/Protokoll_der_letzten_Sicherung.log" || fail "Gespeicherter Protokolltext fehlt: $1"; }
 assert_no_dump_temp() {
     local candidate
-    for candidate in "${destination}"/.postgres-dump.sql.*; do
+    for candidate in "${destination}"/.postgres-dump.sql.* "${destination}"/.Sicherungsinfo.txt.*; do
         assert_absent "${candidate}"
     done
 }
@@ -55,6 +55,8 @@ dpkg() {
 date() {
     if [[ "$*" == '+%Y-%m-%dT%H-%M-%S' ]]; then
         printf '2026-09-19T12-34-56\n'
+    elif [[ "$*" == '+%Y-%m-%dT%H:%M:%S%z' ]]; then
+        printf '2026-09-19T12:34:56+0200\n'
     else
         command date "$@"
     fi
@@ -107,6 +109,13 @@ docker() {
             [[ "${MOCK_DOCKER}" != stopped ]] || state=false
             [[ "${MOCK_DOCKER}" != no-db || "${id}" != "${MOCK_POSTGRES_ID}" ]] || state=false
             printf '%s %s\n' "${state}" "${id}"
+        elif [[ "${format}" == '{{.Config.Image}}' ]]; then
+            [[ "${MOCK_INFO}" != image-fail ]] || { printf 'SIMULATED_IMAGE_QUERY_FAILURE\n' >&2; return 7; }
+            if [[ "${ref}" == "${MOCK_PAPERLESS_ID}" ]]; then
+                printf 'ghcr.io/paperless-ngx/paperless-ngx:latest\n'
+            else
+                printf 'postgres:16\n'
+            fi
         elif [[ "${format}" == '{{range .Mounts}}'* ]]; then
             [[ "${ref}" == "${MOCK_PAPERLESS_ID}" ]] || return 99
             case "${MOCK_MOUNT}" in
@@ -130,6 +139,16 @@ docker() {
         id="$2"
         shift 2
         case "$1" in
+            python3)
+                [[ "${id}" == "${MOCK_PAPERLESS_ID}" && $# -eq 4 && "$2 $3" == '-B -c' && "$4" == 'import runpy; print(runpy.run_path("/usr/src/paperless/src/paperless/version.py")["__full_version_str__"])' ]] || return 99
+                case "${MOCK_INFO}" in
+                    version-fail) printf 'SIMULATED_VERSION_QUERY_FAILURE\n' >&2; return 8 ;;
+                    version-empty) return 0 ;;
+                    version-invalid) printf 'latest\n' ;;
+                    version-multiline) printf '2.20.0\nUNEXPECTED_OUTPUT\n' ;;
+                    *) printf '2.20.0\n' ;;
+                esac
+                ;;
             document_exporter)
                 [[ "${id}" == "${MOCK_PAPERLESS_ID}" && $# -eq 5 && "$2" == "${MOCK_EXPORT_CONTAINER}" && "$3 $4 $5" == '-d -p -z' ]] || return 99
                 if [[ "${MOCK_DOCKER}" == export-fail ]]; then
@@ -154,6 +173,9 @@ docker() {
                 fi
                 [[ "${MOCK_DOCKER}" != empty-dump ]] || return 0
                 [[ "${MOCK_DOCKER}" != dump-warning ]] || printf 'SIMULATED_PG_DUMP_WARNING\n' >&2
+                if [[ "${MOCK_INFO}" != headers-missing ]]; then
+                    printf '%s\n' '--' '-- PostgreSQL database dump' '--' '' '\restrict TEST_DUMP_KEY' '' '-- Dumped from database version 16.4 (Debian 16.4-1)' '-- Dumped by pg_dump version 17.6'
+                fi
                 printf 'SQL-Dump\n'
                 ;;
             *) return 99 ;;
@@ -188,6 +210,12 @@ mv() {
         [[ "${MOCK_PREFLIGHT}" != readback-fail ]] || printf 'corrupt\n' > "$4"
         return 0
     fi
+    if [[ $# -eq 4 && "$1 $2" == '-fT --' && "$3" == "${MOCK_DEST}/.Sicherungsinfo.txt."* && "$4" == "${MOCK_DEST}/Sicherungsinfo.txt" ]]; then
+        [[ "${MOCK_INFO}" != rename-fail ]] || { printf 'SIMULATED_INFO_RENAME_FAILURE\n' >&2; return 19; }
+        [[ -f "${MOCK_CASE}/chown-complete" ]] || return 99
+        command mv "$@"
+        return $?
+    fi
     [[ $# -eq 4 && "$1" == -fT && "$2" == -- && "$3" == "${MOCK_DEST}/.postgres-dump.sql."* && "$4" == "${MOCK_DEST}/postgres-dump.sql" ]] || return 99
     if [[ "${MOCK_MOVE}" == fail ]]; then printf 'SIMULATED_RENAME_FAILURE\n' >&2; return 14; fi
     command mv "$@"
@@ -217,8 +245,9 @@ rm() {
         command rm "$@"
         return $?
     fi
-    if [[ $# -eq 3 && "$1" == -f && "$2" == -- && "$3" == "${MOCK_DEST}/.postgres-dump.sql."* ]]; then
+    if [[ $# -eq 3 && "$1" == -f && "$2" == -- && ( "$3" == "${MOCK_DEST}/.postgres-dump.sql."* || "$3" == "${MOCK_DEST}/.Sicherungsinfo.txt."* || "$3" == "${MOCK_DEST}/Sicherungsinfo.txt" ) ]]; then
         [[ "$(realpath -m -- "$3")" == "${test_root}/"* && ! -L "$3" ]] || return 99
+        [[ "${MOCK_INFO}" != remove-fail || "$3" != "${MOCK_DEST}/Sicherungsinfo.txt" ]] || { printf 'SIMULATED_INFO_REMOVE_FAILURE\n' >&2; return 20; }
         command rm -f -- "$3"
         return $?
     fi
@@ -248,12 +277,24 @@ find() {
     command find "$@"
 }
 mktemp() {
+    if [[ "${MOCK_INFO:-}" == create-fail && "${*: -1}" == "${MOCK_DEST}/.Sicherungsinfo.txt."* ]]; then
+        printf 'SIMULATED_INFO_CREATE_FAILURE\n' >&2
+        return 21
+    fi
     if [[ "${MOCK_PREFLIGHT:-}" == create-fail && "${*: -1}" == "${MOCK_BACKUP}/.paperless-preflight."* ]]; then
         printf 'SIMULATED_PREFLIGHT_WRITE_DENIED\n' >&2
         return 18
     fi
     command mktemp "$@"
 }
+printf() {
+    if [[ "${MOCK_INFO:-}" == write-fail && "$1" == 'Paperless-ngx – Informationen zu dieser Sicherung\n\n' ]]; then
+        builtin printf 'SIMULATED_INFO_WRITE_FAILURE\n' >&2
+        return 22
+    fi
+    builtin printf "$@"
+}
+export -f printf
 findmnt() {
     printf '%q ' "$@" >> "${MOCK_CASE}/findmnt.log"
     printf '\n' >> "${MOCK_CASE}/findmnt.log"
@@ -297,6 +338,7 @@ prepare_case() {
     export MOCK_CASE="${case_root}" MOCK_PROJECT="${project}" MOCK_BACKUP="${backup}"
     export MOCK_UPDATE=current MOCK_DOCKER=running MOCK_RSYNC=ok MOCK_DELETE=ok
     export MOCK_CHOWN=ok MOCK_COPY=ok MOCK_MOVE=ok MOCK_LOGGER=ok
+    export MOCK_INFO=ok
     export MOCK_PAPERLESS_ID=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     export MOCK_POSTGRES_ID=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
     export MOCK_EXPORT_HOST="${project}/export" MOCK_EXPORT_CONTAINER=/usr/src/paperless/export
@@ -366,6 +408,8 @@ assert_backup() {
     assert_file "${destination}/export/document.txt"
     assert_file "${destination}/postgres-dump.sql"
     grep -Fxq 'SQL-Dump' "${destination}/postgres-dump.sql" || fail 'Dump-Inhalt falsch'
+    assert_file "${destination}/Sicherungsinfo.txt"
+    assert_no_dump_temp
 }
 make_version() {
     local name="$1" marked="$2" age="$3"
@@ -493,6 +537,7 @@ if grep -Fq 'wurde gelöscht' "${case_root}/output.log"; then fail 'Falsche Erfo
 pass 'Löschfehler wird nicht als Erfolg protokolliert'
 assert_saved_log 'SIMULATED_DELETE_FAILURE'
 assert_saved_log 'Rückgabecode: 13'
+assert_absent "${destination}/Sicherungsinfo.txt"
 
 for failure in dump-fail partial-dump empty-dump interrupted-dump rename-fail; do
     prepare_case "preserve-${failure}" 0
@@ -521,7 +566,8 @@ done
 
 prepare_case successful-replacement 0
 printf 'Alter Dump\n' > "${destination}/postgres-dump.sql"
-export MOCK_DOCKER=dump-warning
+# Minimaler Dump für den exakten Vergleich von SQL- und Protokollausgaben.
+export MOCK_DOCKER=dump-warning MOCK_INFO=headers-missing
 run_backup || fail 'Ersetzung des Dumps'
 assert_backup
 [[ "$(cat -- "${destination}/postgres-dump.sql")" == SQL-Dump ]] || fail 'Protokolltext im SQL-Dump'
@@ -1014,5 +1060,119 @@ assert_log 'Der erwartete Mountpfad ist nicht mehr verfügbar'
 assert_absent "${MOCK_EXPECTED_MOUNT}"
 assert_no_export_started
 pass 'Verschwundener Mountpfad wird nicht neu angelegt'
+
+for history in 0 30; do
+    prepare_case "info-content-${history}" "${history}"
+    printf 'SECRET_TEST_VALUE=not-for-the-overview\n' > "${project}/.env"
+    run_backup || { cat -- "${case_root}/output.log"; fail 'Versionsübersicht'; }
+    assert_backup
+    info="${destination}/Sicherungsinfo.txt"
+    for expected in \
+        'Sicherungsbeginn: 2026-09-19T12:34:56+0200' \
+        'Datenübertragung abgeschlossen: 2026-09-19T12:34:56+0200' \
+        'Skriptversion: 1.0-700' \
+        'Paperless-ngx-Version: 2.20.0' \
+        'PostgreSQL-Serverversion (aus Dump): 16.4 (Debian 16.4-1)' \
+        'pg_dump-Version (aus Dump): 17.6' \
+        'Paperless-ngx-Image: ghcr.io/paperless-ngx/paperless-ngx:latest' \
+        'PostgreSQL-Image: postgres:16' \
+        '  .env – Konfigurationsdatei'; do
+        grep -Fxq -- "${expected}" "${info}" || fail "Falsche/fehlende Versionsangabe: ${expected}"
+    done
+    if grep -Eq 'SECRET_TEST_VALUE|SQL-Dump' "${info}"; then fail 'Dateninhalt in Versionsübersicht'; fi
+    if grep -q $'\r' "${info}"; then fail 'Windows-Zeilenumbrüche in Versionsübersicht'; fi
+    if [[ "${history}" == 30 ]]; then assert_absent "${backup}/Sicherungsinfo.txt"; fi
+    assert_saved_log 'Die Versionsübersicht wurde in [ Sicherungsinfo.txt ] gesichert.'
+    pass "Versionsübersicht mit getrennten Server-/Clientversionen, Zeitversatz und Linux-Zeilenumbrüchen: ${history}"
+done
+
+for failure in version-fail version-empty version-invalid version-multiline image-fail headers-missing; do
+    prepare_case "info-optional-${failure}" 0
+    export MOCK_INFO="${failure}"
+    run_backup || fail "Optionale Versionsabfrage verhindert Sicherung: ${failure}"
+    assert_backup
+    assert_saved_log 'nicht ermittelbar; Versionsübersicht bleibt an dieser Stelle unvollständig.'
+    case "${failure}" in
+        version-*) expected='Paperless-ngx-Version: nicht ermittelbar' ;;
+        image-*) expected='Paperless-ngx-Image: nicht ermittelbar' ;;
+        headers-*) expected='PostgreSQL-Serverversion (aus Dump): nicht ermittelbar' ;;
+    esac
+    grep -Fxq -- "${expected}" "${destination}/Sicherungsinfo.txt" || fail 'Unbekannte Version nicht gekennzeichnet'
+    if grep -q 'UNEXPECTED_OUTPUT' "${destination}/Sicherungsinfo.txt"; then fail 'Mehrzeilige Metadaten übernommen'; fi
+    pass "Fehlende/ungültige Zusatzinformationen verhindern keine Sicherung: ${failure}"
+done
+
+for failure in create-fail write-fail rename-fail; do
+    prepare_case "info-required-${failure}" 30
+    make_version 2020-01-01T00-00-00 yes 45
+    export MOCK_INFO="${failure}"
+    if run_backup; then fail "Schreibfehler der Versionsübersicht ignoriert: ${failure}"; fi
+    assert_saved_log 'FEHLER: Datensicherung nicht erfolgreich'
+    assert_absent "${destination}/Sicherungsinfo.txt"
+    assert_no_dump_temp
+    assert_absent "${destination}/.paperless-ngx-backup"
+    assert_file "${backup}/2020-01-01T00-00-00/payload.txt"
+    assert_absent "${case_root}/deleted.log"
+    pass "Fehler beim Erstellen/Speichern der Übersicht verhindert Versionsbereinigung: ${failure}"
+done
+
+for failure in export dump copy chown logger; do
+    prepare_case "info-stale-${failure}" 0
+    run_backup || fail 'Erste Sicherung für Versionsübersicht fehlgeschlagen'
+    assert_backup
+    case "${failure}" in
+        export) export MOCK_DOCKER=export-fail ;;
+        dump) export MOCK_DOCKER=dump-fail ;;
+        copy) export MOCK_COPY=fail ;;
+        chown) export MOCK_CHOWN=fail ;;
+        logger) export MOCK_LOGGER=fail ;;
+    esac
+    if run_backup; then fail "Fehler im Folgelauf ignoriert: ${failure}"; fi
+    assert_absent "${destination}/Sicherungsinfo.txt"
+    assert_no_dump_temp
+    pass "Kein veralteter oder vorzeitiger Erfolgsstand nach fehlgeschlagenem Folgelauf: ${failure}"
+done
+
+prepare_case info-remove-fail 0
+printf 'Paperless-ngx – Informationen zu dieser Sicherung\nVorheriger Stand\n' > "${destination}/Sicherungsinfo.txt"
+export MOCK_INFO=remove-fail
+if run_backup; then fail 'Nicht entfernbare alte Übersicht ignoriert'; fi
+assert_no_export_started
+grep -Fxq 'Vorheriger Stand' "${destination}/Sicherungsinfo.txt" || fail 'Alte Übersicht verändert'
+pass 'Nicht entfernbare alte Übersicht stoppt vor dem Export'
+
+for conflict in log config directory hardlink file; do
+    prepare_case "info-conflict-${conflict}" 0
+    case "${conflict}" in
+        log) set_config logfile_name Sicherungsinfo.txt ;;
+        config)
+            printf 'Fremde Notizen\n' > "${case_root}/Sicherungsinfo.txt"
+            set_config_array additional_config_files "${case_root}/Sicherungsinfo.txt" ;;
+        directory) command mkdir -- "${destination}/Sicherungsinfo.txt" ;;
+        file) printf 'Fremde Notizen\n' > "${destination}/Sicherungsinfo.txt" ;;
+        hardlink)
+            printf 'Fremde Notizen\n' > "${case_root}/notes.txt"
+            ln -- "${case_root}/notes.txt" "${destination}/Sicherungsinfo.txt" ;;
+    esac
+    if run_backup; then fail "Konflikt mit Versionsübersicht übersehen: ${conflict}"; fi
+    assert_no_export_started
+    if [[ "${conflict}" == hardlink ]]; then
+        grep -Fxq 'Fremde Notizen' "${case_root}/notes.txt" || fail 'Hardlink-Ziel verändert'
+    elif [[ "${conflict}" == file ]]; then
+        grep -Fxq 'Fremde Notizen' "${destination}/Sicherungsinfo.txt" || fail 'Fremde Datei verändert'
+    fi
+    pass "Versionsübersicht schützt reservierten Namen und fremde Dateien: ${conflict}"
+done
+
+prepare_case info-symlink 0
+printf 'Fremde Notizen\n' > "${case_root}/notes.txt"
+if ln -s -- "${case_root}/notes.txt" "${destination}/Sicherungsinfo.txt" 2>/dev/null && [[ -L "${destination}/Sicherungsinfo.txt" ]]; then
+    if run_backup; then fail 'Symbolischen Link als Versionsübersicht akzeptiert'; fi
+    assert_no_export_started
+    grep -Fxq 'Fremde Notizen' "${case_root}/notes.txt" || fail 'Link-Ziel verändert'
+    pass 'Symbolischer Link als Versionsübersicht abgewiesen'
+else
+    printf 'SKIP: Symbolischer Link für Versionsübersicht in dieser Testumgebung nicht verfügbar\n'
+fi
 
 printf 'Alle Regressionstests erfolgreich.\n'

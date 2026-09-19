@@ -30,13 +30,16 @@ Alle Dateien mit der Endung `.yaml` oder `.yml` direkt im Docker-Projekt-Verzeic
 - **Sicherung des ENV- bzw. Environment-Datei**  
 Direkt im Docker-Projekt-Verzeichnis werden `.env`, `.env.*`, `*.env` und `*.env.*` unter ihrem ursprünglichen Namen gesichert, beispielsweise `.env.production`, `docker-compose.env` und `paperless.env.local`. Auch versteckte Dateien und andere Groß-/Kleinschreibungen werden berücksichtigt. Ausdrücklich verwendete `compose_files`, `compose_env_files` und `additional_config_files` werden unabhängig von Speicherort und Dateiendung ebenfalls gesichert. Zwei unterschiedliche Quelldateien mit gleichem Dateinamen führen vor dem Sicherungslauf zum Abbruch. Verweise wie `env_file`, `include` oder externe Secrets werden nicht automatisch verfolgt; benötigte lokale Dateien müssen in `additional_config_files` angegeben werden.
 
+- **Versionsübersicht zur Sicherung**
+Jeder erfolgreiche Sicherungslauf erzeugt automatisch `Sicherungsinfo.txt` neben Export und Datenbank-Dump, bei Versionsständen im jeweiligen Versionsordner. Darin stehen Zeitpunkt, Skript- und Paperless-Version, PostgreSQL-Server- und `pg_dump`-Version, verwendete Docker-Images und die gesicherten Bestandteile. Die Datei ist einfacher UTF-8-Text mit Linux-Zeilenumbrüchen und lässt sich auf Linux/UGOS mit einem Texteditor oder `cat` lesen. Es sind keine zusätzlichen Einstellungen erforderlich. Nicht ermittelbare Versionsangaben werden mit einem Hinweis gekennzeichnet; Prüfsummen werden nicht erzeugt. Nutzen, Fehlerverhalten und Beispiele erläutert die [Anleitung zur Versionsübersicht](docs/BACKUP-INFO.md).
+
 - **Anpassen der Ordner- und Dateirechte im Sicherungsziel**  
 Abschließend werden die Ordner- und Dateirechte im Datensicherungsziel noch an die angegebenen Benutzer- und Gruppenrechte des Paperless-ngx-Verzeichnisses angepasst.
 
 - **Erstellen von Versionen (Bei Bedarf)**  
 Wird eine Datensicherung mit Versionsständen verwendet, werden im Datensicherungsziel neue Versionsordner im Format "YYYY-MM-DDTHH-MM-SS" angelegt. Ein bereits vorhandener Ordner gleichen Namens führt zum Abbruch, damit fremde oder frühere Daten nicht übernommen werden.
 
-Nach erfolgreichem Dokumentexport, Datenbank-Dump, Kopieren der gefundenen Konfigurationsdateien und Anpassen der Besitzrechte wird der neue Versionsordner mit der Datei `.paperless-ngx-backup` gekennzeichnet. Die automatische Bereinigung erfasst ausschließlich direkte Unterordner mit dem genannten Zeitstempelformat und der passenden Kennzeichnung. Der aktuelle Versionsordner, symbolische Links und unmarkierte Ordner bleiben erhalten. Ist die aktuelle Sicherung unvollständig, findet keine Bereinigung statt.
+Nach erfolgreichem Dokumentexport, Datenbank-Dump, Kopieren der gefundenen Konfigurationsdateien, Anpassen der Besitzrechte und Speichern der Versionsübersicht wird der neue Versionsordner mit der Datei `.paperless-ngx-backup` gekennzeichnet. Die automatische Bereinigung erfasst ausschließlich direkte Unterordner mit dem genannten Zeitstempelformat und der passenden Kennzeichnung. Der aktuelle Versionsordner, symbolische Links und unmarkierte Ordner bleiben erhalten. Ist die aktuelle Sicherung unvollständig, findet keine Bereinigung statt.
 
 **Vorhandene Sicherungen aus älteren Skriptversionen werden nicht automatisch nachträglich gekennzeichnet oder gelöscht.** Sie können nach eigener Prüfung manuell bereinigt werden. Kennzeichnungsdateien dürfen nicht in fremde Ordner kopiert werden. Wie bisher richtet sich das Alter nach der Änderungszeit des Versionsordners (`find -mtime +N`, volle 24-Stunden-Zeiträume), nicht nach seinem Namen.
 
@@ -158,7 +161,7 @@ Die integrierte Exportfunktion von Paperless-ngx wird ausgeführt. Bitte warten.
 - Details zur Versionsgeschichte findest du in der Datei [CHANGELOG](CHANGELOG)
 
 ## Regressionstests
-Die Tests prüfen Dateinamen, Pfade mit Leerzeichen, fehlgeschlagene Update-Abfragen, Konfigurationsfehler, den Erhalt vorheriger Dumps, Fehlercodes und gespeicherte Diagnosen sowie die Grenzen der Versionsbereinigung in temporären Testverzeichnissen. Hinzu kommen Compose-/Container-Auswahl, externe Konfigurationen, abweichende Exportpfade, fehlende Programme, Schreibtestfehler sowie fehlende, falsche oder während der Sicherung gewechselte Mounts:
+Die Tests prüfen Dateinamen, Pfade mit Leerzeichen, fehlgeschlagene Update-Abfragen, Konfigurationsfehler, den Erhalt vorheriger Dumps, Fehlercodes und gespeicherte Diagnosen sowie die Grenzen der Versionsbereinigung in temporären Testverzeichnissen. Hinzu kommen Compose-/Container-Auswahl, externe Konfigurationen, abweichende Exportpfade, fehlende Programme, Schreibtestfehler sowie fehlende, falsche oder während der Sicherung gewechselte Mounts. Für die Versionsübersicht werden Inhalte, fehlende Versionsangaben, Schreibfehler, Namenskonflikte und fehlgeschlagene Folgeläufe geprüft:
 
 ```bash
 bash tests/regression.sh

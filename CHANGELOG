@@ -1,5 +1,8 @@
 Paperless-ngx Backup-Script Release Notes
 Noch nicht veröffentlicht
+ - Automatische Versionsübersicht Sicherungsinfo.txt je erfolgreicher Sicherung: Zeitpunkte, Skript-/Paperless-Version, getrennte PostgreSQL-Server-/pg_dump-Versionen, Docker-Images und gesicherte Bestandteile.
+ - Linux-/UGOS-lesbarer UTF-8-Text mit LF-Zeilenumbrüchen, ohne zusätzliche Einstellungen, Host-Pakete oder Prüfsummen. Nicht ermittelbare Zusatzangaben bleiben Hinweise; Schreibfehler verhindern die Versionsbereinigung.
+ - Anleitung zur Versionsübersicht und Regressionstests für Inhalte, Fehlerfälle, Namenskonflikte und veraltete Übersichten ergänzt.
  - Vorprüfungen für Pflichtprogramme und benötigte Dateiwerkzeug-Optionen ergänzt; ein temporärer Schreib-, Lese-, Umbenennungs- und Löschtest erfolgt vor dem Export und dem Ersetzen des bisherigen Protokolls.
  - Optionaler Schutz externer Sicherungsziele über Mountpunkt und erwartete Quelle (z. B. UUID oder Freigabe): Prüfung vor Schreibzugriffen und erneut vor wichtigen Sicherungs- und Löschschritten.
  - Fehlende Update-Helfer und Fehler beim Versionsvergleich werden als Hinweis protokolliert und verhindern das Backup nicht.
