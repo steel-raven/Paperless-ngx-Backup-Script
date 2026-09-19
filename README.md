@@ -8,7 +8,7 @@ Mithilfe des hier vorgestellten Skripts sollen der Export und die anschließende
 ## So funktioniert das Skript genau
 
 - **Erstellung eines Datensicherungsprotokolls**  
-Zunächst wird im angegebenen Datensicherungsziel ein neues Protokoll erstellt, das im Folgenden mit Informationen zum aktuellen Sicherungsverlauf beschrieben wird. Dabei wird das mitlaufende Protokoll auch in Echtzeit auf der Kommandozeile ausgegeben. 
+Nach erfolgreicher Konfigurationsprüfung wird im angegebenen Datensicherungsziel ein neues Protokoll erstellt. Es enthält den Sicherungsverlauf sowie Ausgaben und Fehler der aufgerufenen Programme und wird auch auf der Kommandozeile ausgegeben. Bei einem Abbruch werden der betroffene Schritt und der Rückgabecode ergänzt. Die SQL-Ausgabe von `pg_dump` bleibt ausschließlich in der Dump-Datei. Fehler vor dem Anlegen des Protokolls, etwa bei ungültigen Pfaden, erscheinen auf der Kommandozeile bzw. in der Ausgabe des Aufgabenplaners; ein vorhandenes Protokoll bleibt dann unverändert.
 
 - **Prüfung auf Skript-Updates**
 Vor der Sicherung wird die aktuelle Skriptversion auf GitHub abgefragt. Kann diese Prüfung nicht abgeschlossen werden, beispielsweise ohne Internetverbindung, erscheint ein Hinweis im Protokoll und die lokale Datensicherung wird fortgesetzt.
@@ -21,6 +21,8 @@ Nach Abschluss des Exports werden die Daten aus dem Ordner `/export` in das loka
 
 - **Ausführung der integrierten Exportfunktion (Dump) von PostgreSQL**  
 Zum Exportieren der eigentlichen Datenbankinhalte bietet PostgreSQL mit `pg_dump` eine eigene Funktion an. Dabei werden die zu exportierenden Datenbankinhalte direkt ins lokale Datensicherungsziel übertragen und in einer Datei mit der Dateiendung `.sql` gespeichert. Vor der Ausführung dieser Funktion wird zunächst geprüft, ob der PostgreSQL Container von Paperless-ngx läuft, da der Export sonst nicht ausgeführt werden kann.
+
+Der Dump wird zunächst in eine temporäre Datei im selben Sicherungsverzeichnis geschrieben. Nur wenn `pg_dump` erfolgreich endet und die Datei nicht leer ist, ersetzt sie atomar `postgres-dump.sql`. Bei einem Fehler, einem leeren Ergebnis oder einem abgefangenen Abbruchsignal bleibt der bisherige Dump erhalten; die temporäre Datei wird entfernt. Diese Prüfung ersetzt keinen Wiederherstellungstest und macht nicht den gesamten Sicherungssatz atomar: Das Exportverzeichnis wird weiterhin vorher aktualisiert.
  
 - **Sicherung des YAML- bzw. Docker-Compose-Datei**  
 Alle Dateien mit der Endung `.yaml` oder `.yml` direkt im Docker-Projekt-Verzeichnis werden unter ihrem ursprünglichen Namen gesichert. Dazu gehören beispielsweise `compose.yaml`, `docker-compose.yml` und `compose.override.yaml`, ebenso versteckte Dateien. Groß- und Kleinschreibung der Endung spielt keine Rolle.
@@ -34,9 +36,23 @@ Abschließend werden die Ordner- und Dateirechte im Datensicherungsziel noch an 
 - **Erstellen von Versionen (Bei Bedarf)**  
 Wird eine Datensicherung mit Versionsständen verwendet, werden im Datensicherungsziel neue Versionsordner im Format "YYYY-MM-DDTHH-MM-SS" angelegt. Ein bereits vorhandener Ordner gleichen Namens führt zum Abbruch, damit fremde oder frühere Daten nicht übernommen werden.
 
-Nach erfolgreichem Dokumentexport und Datenbank-Dump wird der neue Versionsordner mit der Datei `.paperless-ngx-backup` gekennzeichnet. Die automatische Bereinigung erfasst ausschließlich direkte Unterordner mit dem genannten Zeitstempelformat und der passenden Kennzeichnung. Der aktuelle Versionsordner, symbolische Links und unmarkierte Ordner bleiben erhalten. Ist der aktuelle Export oder Dump unvollständig, findet keine Bereinigung statt.
+Nach erfolgreichem Dokumentexport, Datenbank-Dump, Kopieren der gefundenen Konfigurationsdateien und Anpassen der Besitzrechte wird der neue Versionsordner mit der Datei `.paperless-ngx-backup` gekennzeichnet. Die automatische Bereinigung erfasst ausschließlich direkte Unterordner mit dem genannten Zeitstempelformat und der passenden Kennzeichnung. Der aktuelle Versionsordner, symbolische Links und unmarkierte Ordner bleiben erhalten. Ist die aktuelle Sicherung unvollständig, findet keine Bereinigung statt.
 
 **Vorhandene Sicherungen aus älteren Skriptversionen werden nicht automatisch nachträglich gekennzeichnet oder gelöscht.** Sie können nach eigener Prüfung manuell bereinigt werden. Kennzeichnungsdateien dürfen nicht in fremde Ordner kopiert werden. Wie bisher richtet sich das Alter nach der Änderungszeit des Versionsordners (`find -mtime +N`, volle 24-Stunden-Zeiträume), nicht nach seinem Namen.
+
+Ein vollständiger Lauf endet mit Rückgabecode `0`. Fehlende oder gestoppte Container, leere Export-/Dump-Ergebnisse und fehlgeschlagene erforderliche Arbeitsschritte ergeben einen Fehlerstatus. Bei einem unmittelbar abbrechenden externen Befehl wird dessen Rückgabecode weitergegeben, bei einer unvollständigen Sicherung der Code `1`. Eine übersprungene Updateprüfung und nicht vorhandene YAML-/ENV-Dateien bleiben Hinweise und erzeugen für sich allein keinen Fehlerstatus.
+
+## Konfiguration prüfen
+
+Vor der ersten Ausführung müssen die Angaben am Anfang des Skripts angepasst werden. Die Prüfung erfolgt vor dem Erstellen von Verzeichnissen, Überschreiben des Protokolls oder Starten des Exports:
+
+- `project_dir` und `backup_dir` müssen absolute Pfade sein; die voreingestellten Platzhalter sind zu ersetzen. Das Projektverzeichnis muss existieren. Das Sicherungsziel muss ein eigenes Unterverzeichnis sein. Dateisystem-/oberste Wurzelverzeichnisse und kritische Systemverzeichnisse werden abgewiesen.
+- Projekt und Sicherungsziel dürfen weder identisch noch ineinander verschachtelt sein. Beim Vergleich werden `..` und vorhandene symbolische Links aufgelöst.
+- `version_history` erlaubt `0` oder eine positive ganze Zahl ohne führende Nullen, beispielsweise `30`. Werte wie `30 Tage`, `-1` oder eine leere Angabe werden abgelehnt.
+- `logfile_name` muss ein einfacher Dateiname ohne Pfadbestandteile sein. Reservierte Sicherungsnamen und YAML-/ENV-Dateinamen sind ausgeschlossen. Eine vorhandene Protokolldatei darf kein symbolischer Link, Verzeichnis, Hardlink oder das Skript selbst sein.
+- Für Paperless-ngx und PostgreSQL muss jeweils mindestens ein gültiger Service- oder Containername angegeben sein. PostgreSQL-Benutzer und Datenbankname dürfen nicht leer sein.
+
+Das Skript verwendet Bash und GNU-Coreutils, für diese Prüfungen und den Dump insbesondere `realpath` mit `-e`/`-m`, `mktemp` und `mv -T`.
 
 ## Installationshinweise
 Mit Hilfe des Kommandozeilenprogramms `curl` kann die Shell-Skript-Datei **Paperless-ngx-Backup-Script.sh** einfach über ein Terminalprogramm deiner Wahl heruntergeladen werden. Als Speicherort bietet sich das eigene Benutzer-Home-Verzeichnis an, es kann jedoch auch jedes andere erreichbare Verzeichnis verwendet werden. Wechsle in das von dir gewählte Verzeichnis. Führe dann den folgenden Befehl aus. Damit wird die Skriptdatei in das ausgewählte Verzeichnis heruntergeladen.
@@ -119,7 +135,7 @@ Die integrierte Exportfunktion von Paperless-ngx wird ausgeführt. Bitte warten.
 - Details zur Versionsgeschichte findest du in der Datei [CHANGELOG](CHANGELOG)
 
 ## Regressionstests
-Die Tests prüfen Dateinamen, Pfade mit Leerzeichen, fehlgeschlagene Update-Abfragen und die Grenzen der Versionsbereinigung in temporären Testverzeichnissen:
+Die Tests prüfen Dateinamen, Pfade mit Leerzeichen, fehlgeschlagene Update-Abfragen, Konfigurationsfehler, den Erhalt vorheriger Dumps, Fehlercodes und gespeicherte Diagnosen sowie die Grenzen der Versionsbereinigung in temporären Testverzeichnissen:
 
 ```bash
 bash tests/regression.sh

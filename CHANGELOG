@@ -4,6 +4,10 @@ Noch nicht veröffentlicht
  - Eine fehlgeschlagene Update-Abfrage wird protokolliert und verhindert die lokale Sicherung nicht mehr.
  - YAML- und ENV-Dateivarianten einschließlich .yml, .env und .env.production werden berücksichtigt.
  - Die Versionsbereinigung löscht nur gekennzeichnete Versionsordner nach einer vollständigen Sicherung; alte unmarkierte Ordner bleiben erhalten.
+ - PostgreSQL-Dumps ersetzen die bisherige Datei erst nach erfolgreicher, nicht leerer Ausgabe; Fehler und abgefangene Abbruchsignale lassen den vorherigen Dump unverändert.
+ - Unvollständige Sicherungen liefern einen Fehlerstatus; fehlgeschlagene erforderliche Arbeitsschritte verhindern die Versionsbereinigung.
+ - Konfigurationswerte werden vor Schreibzugriffen geprüft, insbesondere Pfadüberschneidungen, kritische Sicherungsziele, Protokollnamen und Aufbewahrungswerte.
+ - Ausgaben und Fehler externer Befehle sowie der Abbruchschritt und Rückgabecode werden im Sicherungsprotokoll festgehalten; SQL-Inhalte bleiben davon getrennt.
  - Isolierte Regressionstests für erfolgreiche Sicherungen und Fehlerfälle ergänzt.
 
 Version 1.0-700 vom 19.09.2026
