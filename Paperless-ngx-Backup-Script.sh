@@ -1,6 +1,6 @@
 #!/bin/bash
 # Filename: Paperless-ngx-Backup-Script.sh - coded in utf-8
-version="1.0-600"
+version="1.0-700"
 
 
 #             Backupskript für Paperless-ngx
@@ -35,7 +35,7 @@ postgres_container_name="Paperless-ngx-PostgreSQL"
 # Benutzername für die PostgreSQL-Datenbank
 postgresql_user="paperless"
 
-# Passwort für die PostgreSQL-Datenbank
+# Name der PostgreSQL-Datenbank
 postgresql_db="paperless"
 
 # Angabe einer Zeit in Tagen, wie lange Versionsordner behalten
@@ -232,7 +232,7 @@ if [[ -d "${backup_dir}" ]]; then
         else
             for envfile in "${envfiles[@]}"; do
                 cp -p -- "${envfile}" "${backup_dir}/"
-                if [[ -s "${backup_dir}/${yamlfile##*/}" ]]; then
+                if [[ -s "${backup_dir}/${envfile##*/}" ]]; then
                     log " - Die ENV-Datei [ ${envfile##*/} ] wurde gesichert."
                 else
                     log " - Beim Sichern der ENV-Datei [ ${envfile##*/} ] ist ein Fehler aufgetreten!"
