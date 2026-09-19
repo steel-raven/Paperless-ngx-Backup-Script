@@ -14,10 +14,10 @@ Nach erfolgreicher Konfigurationsprüfung wird im angegebenen Datensicherungszie
 Vor der Sicherung wird die aktuelle Skriptversion auf GitHub abgefragt. Kann diese Prüfung nicht abgeschlossen werden, beispielsweise ohne Internetverbindung, erscheint ein Hinweis im Protokoll und die lokale Datensicherung wird fortgesetzt.
 
 - **Ausführung der integrierten Exportfunktion von Paperless-ngx**  
-Zum Exportieren vorhandener Datenbankinhalte, Metadaten, Benutzerprofile und -einstellungen etc. bietet Paperless-ngx mit dem `document_exporter` eine eigene Funktion an. Vor der Ausführung dieser Funktion wird zunächst geprüft, ob der Paperless-ngx-Container läuft, da der Export sonst nicht ausgeführt werden kann. Die exportierten Daten werden im Unterverzeichnis `/export` des Paperless-ngx-Verzeichnisses in einer ZIP-Datei mit der Syntax `export-YYYY-MM-DD.zip` abgelegt. 
+Zum Exportieren vorhandener Datenbankinhalte, Metadaten, Benutzerprofile und -einstellungen etc. bietet Paperless-ngx mit dem `document_exporter` eine eigene Funktion an. Vor dem Export werden beide laufenden Container und die Zuordnung des Exportverzeichnisses geprüft. Standardmäßig wird der Hostordner `${project_dir}/export` am Containerpfad `/usr/src/paperless/export` erwartet. Beide Pfade lassen sich getrennt konfigurieren. Die exportierten Daten werden dort in einer ZIP-Datei mit der Syntax `export-YYYY-MM-DD.zip` abgelegt.
 
 - **Sicherung des Exportverzeichnis `/export`**  
-Nach Abschluss des Exports werden die Daten aus dem Ordner `/export` in das lokale Ziel der Datensicherung übertragen.
+Nach Abschluss des Exports wird der Inhalt des geprüften Host-Exportordners in `${backup_dir}/export` übertragen. Dieser Name im Sicherungsziel bleibt auch bei abweichenden Quellpfaden gleich.
 
 - **Ausführung der integrierten Exportfunktion (Dump) von PostgreSQL**  
 Zum Exportieren der eigentlichen Datenbankinhalte bietet PostgreSQL mit `pg_dump` eine eigene Funktion an. Dabei werden die zu exportierenden Datenbankinhalte direkt ins lokale Datensicherungsziel übertragen und in einer Datei mit der Dateiendung `.sql` gespeichert. Vor der Ausführung dieser Funktion wird zunächst geprüft, ob der PostgreSQL Container von Paperless-ngx läuft, da der Export sonst nicht ausgeführt werden kann.
@@ -28,7 +28,7 @@ Der Dump wird zunächst in eine temporäre Datei im selben Sicherungsverzeichnis
 Alle Dateien mit der Endung `.yaml` oder `.yml` direkt im Docker-Projekt-Verzeichnis werden unter ihrem ursprünglichen Namen gesichert. Dazu gehören beispielsweise `compose.yaml`, `docker-compose.yml` und `compose.override.yaml`, ebenso versteckte Dateien. Groß- und Kleinschreibung der Endung spielt keine Rolle.
 
 - **Sicherung des ENV- bzw. Environment-Datei**  
-Direkt im Docker-Projekt-Verzeichnis werden `.env`, `.env.*`, `*.env` und `*.env.*` unter ihrem ursprünglichen Namen gesichert, beispielsweise `.env.production`, `docker-compose.env` und `paperless.env.local`. Auch versteckte Dateien und andere Groß-/Kleinschreibungen werden berücksichtigt. Dateien in Unterverzeichnissen, außerhalb des Projektverzeichnisses oder mit frei gewählten Namen ohne diese Muster müssen separat gesichert werden; Verweise wie `env_file` werden nicht ausgewertet.
+Direkt im Docker-Projekt-Verzeichnis werden `.env`, `.env.*`, `*.env` und `*.env.*` unter ihrem ursprünglichen Namen gesichert, beispielsweise `.env.production`, `docker-compose.env` und `paperless.env.local`. Auch versteckte Dateien und andere Groß-/Kleinschreibungen werden berücksichtigt. Ausdrücklich verwendete `compose_files`, `compose_env_files` und `additional_config_files` werden unabhängig von Speicherort und Dateiendung ebenfalls gesichert. Zwei unterschiedliche Quelldateien mit gleichem Dateinamen führen vor dem Sicherungslauf zum Abbruch. Verweise wie `env_file`, `include` oder externe Secrets werden nicht automatisch verfolgt; benötigte lokale Dateien müssen in `additional_config_files` angegeben werden.
 
 - **Anpassen der Ordner- und Dateirechte im Sicherungsziel**  
 Abschließend werden die Ordner- und Dateirechte im Datensicherungsziel noch an die angegebenen Benutzer- und Gruppenrechte des Paperless-ngx-Verzeichnisses angepasst.
@@ -53,6 +53,14 @@ Vor der ersten Ausführung müssen die Angaben am Anfang des Skripts angepasst w
 - Für Paperless-ngx und PostgreSQL muss jeweils mindestens ein gültiger Service- oder Containername angegeben sein. PostgreSQL-Benutzer und Datenbankname dürfen nicht leer sein.
 
 Das Skript verwendet Bash und GNU-Coreutils, für diese Prüfungen und den Dump insbesondere `realpath` mit `-e`/`-m`, `mktemp` und `mv -T`.
+
+## Compose, Portainer und Exportpfade
+
+Mit `docker_mode="auto"` wird eine Compose-Datei direkt im Projektverzeichnis verwendet, falls eine vorhanden ist; ansonsten werden die angegebenen Containernamen angesprochen. `docker_mode="compose"` und `docker_mode="container"` legen die Auswahl ausdrücklich fest. Sobald Compose gewählt ist, führen Fehler oder eine mehrdeutige Containerauswahl zum Abbruch statt zu einem Wechsel auf andere Container. Leere Servicenamen auf beiden Seiten wählen im Auto-Modus weiterhin die Containernamen, sofern keine Compose-Dateien ausdrücklich angegeben wurden.
+
+Vor `document_exporter -d` muss `export_container_dir` direkt über einen schreibbaren Bind-Mount mit `export_host_dir` verbunden sein. Nicht passende, verschachtelte oder nur lesbare Export-Mounts werden abgewiesen. Diese Ausführung setzt einen lokalen Linux-Docker-Daemon voraus; entfernte Docker-Daemons, Swarm und Docker-Volumes als Exportziel sind nicht abgedeckt. Standardinstallationen mit dem Bind-Mount `./export:/usr/src/paperless/export` können ihre bisherigen Exportpfade weiterverwenden.
+
+Die neue Prüfung ist bewusst strenger: Früher konnte ein falsch zugeordneter oder veralteter Hostordner kopiert werden, während der Export anderswo landete. Nun muss die Zuordnung vor dem Export stimmen. Konkrete Beispiele für UGOS/Compose, Portainer, externe Konfigurationsdateien und eigene Exportpfade stehen in [Compose-/Portainer-Konfiguration](docs/COMPOSE-PORTAINER.md).
 
 ## Installationshinweise
 Mit Hilfe des Kommandozeilenprogramms `curl` kann die Shell-Skript-Datei **Paperless-ngx-Backup-Script.sh** einfach über ein Terminalprogramm deiner Wahl heruntergeladen werden. Als Speicherort bietet sich das eigene Benutzer-Home-Verzeichnis an, es kann jedoch auch jedes andere erreichbare Verzeichnis verwendet werden. Wechsle in das von dir gewählte Verzeichnis. Führe dann den folgenden Befehl aus. Damit wird die Skriptdatei in das ausgewählte Verzeichnis heruntergeladen.
@@ -135,7 +143,7 @@ Die integrierte Exportfunktion von Paperless-ngx wird ausgeführt. Bitte warten.
 - Details zur Versionsgeschichte findest du in der Datei [CHANGELOG](CHANGELOG)
 
 ## Regressionstests
-Die Tests prüfen Dateinamen, Pfade mit Leerzeichen, fehlgeschlagene Update-Abfragen, Konfigurationsfehler, den Erhalt vorheriger Dumps, Fehlercodes und gespeicherte Diagnosen sowie die Grenzen der Versionsbereinigung in temporären Testverzeichnissen:
+Die Tests prüfen Dateinamen, Pfade mit Leerzeichen, fehlgeschlagene Update-Abfragen, Konfigurationsfehler, den Erhalt vorheriger Dumps, Fehlercodes und gespeicherte Diagnosen sowie die Grenzen der Versionsbereinigung in temporären Testverzeichnissen. Hinzu kommen Compose-/Container-Auswahl, externe Konfigurationen, abweichende Exportpfade und der Abbruch vor dem Export bei ungeeigneten Mounts:
 
 ```bash
 bash tests/regression.sh

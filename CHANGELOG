@@ -1,5 +1,11 @@
 Paperless-ngx Backup-Script Release Notes
 Noch nicht veröffentlicht
+ - Compose-/Portainer-Erweiterung: Betriebsarten auto, compose und container sowie explizite Compose-Dateien, Variablendateien und Projektnamen ergänzt.
+ - Compose wird auf die ausgewählten lokalen Dateien begrenzt; fehlgeschlagene oder mehrdeutige Abfragen wechseln nicht mehr stillschweigend den Container.
+ - Beide laufenden Container werden vor dem Export geprüft und anschließend über ihre IDs angesprochen.
+ - Host- und Container-Exportpfad sind getrennt einstellbar; ihr direkter, schreibbarer Bind-Mount wird vor document_exporter -d geprüft. Das Sicherungsziel bleibt export/.
+ - Zusätzliche Konfigurationsdateien außerhalb des Projektverzeichnisses sind ausdrücklich wählbar; fehlende Dateien und Namenskollisionen führen zum Abbruch.
+ - Beispiele für Compose und Portainer sowie Tests für Dateiauswahl und Mount-Prüfungen ergänzt.
  - Pfade mit Leerzeichen werden bei Exportprüfung, rsync und Rechteanpassung korrekt übergeben.
  - Eine fehlgeschlagene Update-Abfrage wird protokolliert und verhindert die lokale Sicherung nicht mehr.
  - YAML- und ENV-Dateivarianten einschließlich .yml, .env und .env.production werden berücksichtigt.
