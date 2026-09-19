@@ -14,11 +14,15 @@ version="1.0-700"
 # Pfad zum lokalen Datensicherungsziel
 backup_dir="/Absoluter/Pfad/zum/Datensicherungsziel"
 
-# Optionaler Schutz externer Sicherungsziele: beide leer = ausgeschaltet.
-# Beispiel: /media/USB und UUID=12345678-1234-1234-1234-123456789abc
-# Für Freigaben als Quelle z. B. //server/backup oder server:/backup angeben.
-# backup_dir muss ein Unterverzeichnis dieses Mountpunkts sein.
+# Empfohlen bei Sicherung auf USB-Platte oder Netzwerkfreigabe:
+# Prüfen, ob am Ziel wirklich das erwartete Medium eingebunden ist.
+# Beide Werte leer = Schutz ausgeschaltet (Voreinstellung).
+# Einrichtung mit Beispielen: docs/BACKUP-TARGET.md im GitHub-Projekt.
+# Mountpunkt = Ordner, an dem die Platte/Freigabe eingebunden ist, z. B. /media/USB.
+# backup_dir ist ein eigener Unterordner darunter, z. B. /media/USB/Paperless.
 backup_mountpoint=""
+# Quelle = Kennung der richtigen Platte (UUID=...) oder Freigabe (//server/backup).
+# Tatsächliche Werte auf dem NAS ermitteln; keine Beispielkennung übernehmen.
 backup_mount_source=""
 
 # Dateiname des Sicherungsprotokolls

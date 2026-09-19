@@ -58,9 +58,16 @@ Das Skript verwendet Bash und GNU-Coreutils, für diese Prüfungen und den Dump 
 
 Fehlende Pflichtprogramme werden vor dem ersten externen Aufruf gemeldet. Vor dem Export wird außerdem mit eigenen temporären Dateien geprüft, ob sich im Sicherungsziel Dateien anlegen, schreiben, lesen, ersetzen und entfernen lassen. Bei einem Fehler bleiben vorhandene Sicherungsdateien und das bisherige Protokoll unverändert. Fehlende Werkzeuge für die optionale Updateprüfung verhindern das Backup nicht.
 
-Für USB-Platten und Netzwerkfreigaben können `backup_mountpoint` und `backup_mount_source` gemeinsam gesetzt werden. Das Skript verlangt dann am angegebenen Mountpunkt die erwartete Quelle, beispielsweise eine Dateisystem-UUID oder eine SMB-/NFS-Freigabe. Die Prüfung erfolgt vor dem Anlegen des Backup-Ordners und wird vor wichtigen Schreib- und Löschschritten wiederholt. Mit beiden Angaben leer bleibt der Schutz ausgeschaltet. Bei eingeschaltetem Schutz wird zusätzlich `findmnt` aus util-linux benötigt.
+**Sicherst du auf eine USB-Platte oder eine Netzwerkfreigabe, solltest du zusätzlich den optionalen Schutz des Sicherungsziels einschalten.** Fehlt das Medium, kann sein bisheriger Ordner trotzdem existieren. Ohne diese Prüfung könnte das Backup dort auf dem internen NAS-Speicher landen.
 
-Ein vorhandener Ordner allein beweist nicht, dass das gewünschte Medium eingehängt ist. Die Prüfung des Sicherungsmediums ergänzt die separate Docker-Mount-Prüfung des Exportordners. Beispiele, Voraussetzungen und Grenzen stehen unter [Vorprüfungen und externe Sicherungsziele](docs/BACKUP-TARGET.md).
+| Sicherungsziel | Einstellung |
+| --- | --- |
+| USB-Platte oder auf dem NAS eingebundene SMB-/NFS-Freigabe | Schutz empfohlen: `backup_mountpoint` und `backup_mount_source` anhand der Anleitung ausfüllen. |
+| Normaler Ordner auf einem dauerhaft verfügbaren internen NAS-Volume | Beide neuen Angaben können leer bleiben; der Schutz ist dann ausgeschaltet. |
+
+`backup_mountpoint` bezeichnet den Ordner, an dem das Laufwerk eingebunden ist. `backup_mount_source` benennt die erwartete Platte oder Freigabe. `backup_dir` bleibt dein eigener Sicherungsordner darunter. Die Werte gehören in die vorhandenen Zeilen am Anfang des Skripts. Bei eingeschaltetem Schutz wird zusätzlich `findmnt` aus util-linux benötigt; ein erkanntes fehlendes oder falsches Medium führt zum Abbruch.
+
+Die [Schritt-für-Schritt-Anleitung für USB-Platten und Netzwerkfreigaben](docs/BACKUP-TARGET.md) zeigt, wie du die richtigen Werte auf deinem NAS ermittelst, sie ins Skript überträgst und die erste Sicherung kontrollierst. Sie erklärt auch Fehlermeldungen und das Wechseln von USB-Platten. Diese Funktion prüft den Zielort des fertigen Backups; die Docker-Prüfung des Exportordners ist davon unabhängig.
 
 ## Compose, Portainer und Exportpfade
 
