@@ -4,6 +4,8 @@
 
 ## Automatisierte Prüfungen
 
+Für die erste Vorabversion bestanden lokal unter Git for Windows alle ausführbaren Regressionstests; drei Symlink-Testgruppen wurden dort übersprungen. Der [Linux-Lauf des Veröffentlichungsbranches](https://github.com/steel-raven/Paperless-ngx-Backup-Script/actions/runs/35536956618) bestand **192 Prüfungen, ohne Fehler und ohne übersprungene Fälle**, einschließlich der Symlink-Prüfungen. Bash-Syntax und die Versionsreihenfolge wurden ebenfalls erfolgreich geprüft.
+
 Die [GitHub-Aktion](https://github.com/steel-raven/Paperless-ngx-Backup-Script/actions/workflows/regression.yml) prüft auf Ubuntu die Bash-Syntax, die Versionsreihenfolge und die isolierten Regressionstests. Ein übersprungener Test lässt den Linux-Lauf fehlschlagen. Die Tests verwenden echte lokale Testdateien, ersetzen aber Docker, Netzwerk, `rsync`, Mountabfragen und Besitzrechtsänderungen durch Testfunktionen. Sie greifen nicht auf produktive Sicherungen zu.
 
 Lokaler Aufruf mit Bash und GNU-Dateiwerkzeugen:
