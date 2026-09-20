@@ -2,6 +2,12 @@
 
 Eigenständig gepflegte Weiterentwicklung des [Originalskripts von Tommes/toafez](https://github.com/toafez/Paperless-ngx-Backup-Script), auf Basis der Version `1.0-700`. Vielen Dank an Tommes für die ursprüngliche Arbeit und die Veröffentlichung unter der MIT-Lizenz. Dieser Fork wird von **steel-raven** betreut; Fragen zu seinen Erweiterungen gehören in dieses Repository.
 
+**Transparenz zur Entwicklung**
+
+Bei der Weiterentwicklung dieses Forks nutze ich OpenAI Codex als KI-Unterstützung. Das betrifft die Analyse und Bearbeitung des Codes, die Erstellung automatisierter Tests sowie die Dokumentation. Veröffentlichung und Pflege des Forks erfolgen durch mich unter dem GitHub-Namen steel-raven.
+
+Die KI-Unterstützung ersetzt keine praktischen Sicherungs- und Wiederherstellungstests. Welche Prüfungen bereits durchgeführt wurden und welche noch ausstehen, ist in der [Projektdokumentation](docs/VALIDATION.md) beschrieben.
+
 **Aktueller Stand: `1.1.0~rc1` / [Vorabversion v1.1.0-rc1](https://github.com/steel-raven/Paperless-ngx-Backup-Script/releases/tag/v1.1.0-rc1).** Die erste Veröffentlichung richtet sich an separate Testinstanzen. Eine vollständige Sicherung und Wiederherstellung mit echtem Docker und `rsync` unter Linux/UGOS steht noch aus. Bitte die [bekannten Grenzen und den Prüfplan](docs/VALIDATION.md) beachten.
 
 Die Erweiterungen umfassen den Erhalt vorheriger Datenbank-Dumps bei Fehlern, aussagekräftige Fehlerstatus und Protokolle, eine auf gekennzeichnete Versionsordner begrenzte Bereinigung, explizite Compose-/Container-Auswahl, Prüfungen der Export- und Sicherungsziele sowie `Sicherungsinfo.txt` je Sicherung.
