@@ -1,0 +1,39 @@
+name: Bash regression tests
+
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Check Bash syntax and whitespace
+        run: |
+          bash -n Paperless-ngx-Backup-Script.sh
+          bash -n tests/regression.sh
+          git diff --check HEAD^ HEAD
+      - name: Check release version ordering
+        run: |
+          dpkg --compare-versions '1.1.0~rc1' gt '1.0-700'
+          dpkg --compare-versions '1.1.0~rc2' gt '1.1.0~rc1'
+          dpkg --compare-versions '1.1.0' gt '1.1.0~rc2'
+      - name: Run isolated regression tests including symbolic links
+        shell: bash
+        run: |
+          set -o pipefail
+          bash tests/regression.sh | tee regression.log
+          if grep -q '^SKIP:' regression.log; then
+            echo 'Linux validation requires every test, including symbolic links.' >&2
+            exit 1
+          fi

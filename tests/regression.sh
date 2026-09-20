@@ -38,19 +38,29 @@ pass() { printf 'PASS: %s\n' "$*"; }
 
 # Alle externen Aktionen des Backup-Skripts werden durch lokale Testfunktionen ersetzt.
 wget() {
+    printf '%s\n' "$@" >> "${MOCK_CASE}/update-request.log"
+    [[ $# -eq 5 && "$1 $2 $3 $4" == '--timeout=60 --tries=1 -q -O-' &&
+       "$5" == 'https://github.com/steel-raven/Paperless-ngx-Backup-Script/releases/latest/download/Paperless-ngx-Backup-Script.sh' ]] || return 99
     case "${MOCK_UPDATE}" in
         offline) return 4 ;;
+        tls-error) return 5 ;;
+        no-release) return 8 ;;
         empty) return 0 ;;
         malformed) printf '<html>Fehler</html>\n' ;;
-        newer) printf 'version="9.9-999"\n' ;;
-        current|compare-fail) printf 'version="1.0-700"\n' ;;
+        invalid-version) printf 'version="ungueltig"\n' ;;
+        multiple-versions) printf 'version="1.1.0"\nversion="9.9.999"\n' ;;
+        newer) printf 'version="9.9.999"\n' ;;
+        stable) printf 'version="1.1.0"\n' ;;
+        older) printf 'version="1.0.0"\n' ;;
+        current|compare-fail) printf 'version="1.1.0~rc1"\n' ;;
         *) return 99 ;;
     esac
 }
 dpkg() {
     [[ $# -eq 4 && "$1" == --compare-versions && "$3" == gt ]] || return 99
+    [[ "$4" == '1.1.0~rc1' ]] || return 99
     [[ "${MOCK_UPDATE}" != compare-fail ]] || return 2
-    [[ "$2" == 9.9-999 ]]
+    [[ "$2" == 9.9.999 || "$2" == 1.1.0 ]]
 }
 date() {
     if [[ "$*" == '+%Y-%m-%dT%H-%M-%S' ]]; then
@@ -442,14 +452,19 @@ assert_log 'Die ENV-Datei [ empty.env ] wurde gesichert.'
 assert_log 'Die YAML-Datei [ empty.yml ] wurde gesichert.'
 pass 'Leerzeichen, Musterzeichen und alle dokumentierten Konfigurationsnamen'
 
-for update_mode in current newer offline empty malformed; do
+for update_mode in current older newer stable offline tls-error no-release empty malformed invalid-version multiple-versions; do
     prepare_case "update-${update_mode}" 0
     export MOCK_UPDATE="${update_mode}"
     run_backup || fail "Update-Modus ${update_mode}"
     assert_backup
-    if [[ "${update_mode}" == newer ]]; then
+    grep -Fxq 'https://github.com/steel-raven/Paperless-ngx-Backup-Script/releases/latest/download/Paperless-ngx-Backup-Script.sh' "${case_root}/update-request.log" || fail 'Falsche Updatequelle'
+    if grep -Fq -- '--no-check-certificate' "${case_root}/update-request.log"; then fail 'TLS-Pruefung deaktiviert'; fi
+    if [[ "${update_mode}" == newer || "${update_mode}" == stable ]]; then
         assert_log 'Auf GitHub steht ein Update'
-    elif [[ "${update_mode}" != current ]]; then
+        assert_saved_log 'Link: https://github.com/steel-raven/Paperless-ngx-Backup-Script/releases'
+    elif [[ "${update_mode}" == current || "${update_mode}" == older ]]; then
+        if grep -Eq 'Auf GitHub steht ein Update|Updateprüfung wird übersprungen' "${case_root}/output.log"; then fail 'Unzutreffender Updatehinweis'; fi
+    else
         assert_log 'Die Updateprüfung wird übersprungen'
         grep -Fq 'Die Updateprüfung wird übersprungen' "${backup}/Protokoll_der_letzten_Sicherung.log" || fail 'Update-Hinweis fehlt in Protokolldatei'
     fi
@@ -1070,7 +1085,8 @@ for history in 0 30; do
     for expected in \
         'Sicherungsbeginn: 2026-09-19T12:34:56+0200' \
         'Datenübertragung abgeschlossen: 2026-09-19T12:34:56+0200' \
-        'Skriptversion: 1.0-700' \
+        'Skriptversion: 1.1.0~rc1' \
+        'Skriptprojekt: https://github.com/steel-raven/Paperless-ngx-Backup-Script (steel-raven Fork)' \
         'Paperless-ngx-Version: 2.20.0' \
         'PostgreSQL-Serverversion (aus Dump): 16.4 (Debian 16.4-1)' \
         'pg_dump-Version (aus Dump): 17.6' \

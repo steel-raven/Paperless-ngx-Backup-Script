@@ -1,5 +1,10 @@
-Paperless-ngx Backup-Script Release Notes
-Noch nicht veröffentlicht
+Paperless-ngx Backup-Script – steel-raven Fork: Release Notes
+
+Version 1.1.0~rc1 (Git-Tag v1.1.0-rc1) – erste Vorabversion
+ - Eigenständig gepflegter Fork auf Basis von Tommes/toafez, Version 1.0-700; ursprüngliche Copyright-Angabe und MIT-Lizenz bleiben erhalten.
+ - Installation, Support und Updatehinweise verweisen auf steel-raven/Paperless-ngx-Backup-Script. Die Updateprüfung berücksichtigt ausschließlich veröffentlichte stabile Releases und prüft TLS-Zertifikate.
+ - Skriptprojekt und eigene Versionsnummer erscheinen im Protokoll und in Sicherungsinfo.txt.
+ - Umstiegsanleitung, bekannte Grenzen und Prüfschritte vor einer stabilen Freigabe ergänzt. Automatisierte Regressionstests laufen auch unter Linux auf GitHub.
  - Automatische Versionsübersicht Sicherungsinfo.txt je erfolgreicher Sicherung: Zeitpunkte, Skript-/Paperless-Version, getrennte PostgreSQL-Server-/pg_dump-Versionen, Docker-Images und gesicherte Bestandteile.
  - Linux-/UGOS-lesbarer UTF-8-Text mit LF-Zeilenumbrüchen, ohne zusätzliche Einstellungen, Host-Pakete oder Prüfsummen. Nicht ermittelbare Zusatzangaben bleiben Hinweise; Schreibfehler verhindern die Versionsbereinigung.
  - Anleitung zur Versionsübersicht und Regressionstests für Inhalte, Fehlerfälle, Namenskonflikte und veraltete Übersichten ergänzt.

@@ -1,10 +1,35 @@
 #!/bin/bash
 # Filename: Paperless-ngx-Backup-Script.sh - coded in utf-8
-version="1.0-700"
+version="1.1.0~rc1"
 
 
 #             Backupskript für Paperless-ngx
 #    Copyright (C) 2026 by tommes (toafez) | MIT License
+#    Weiterentwicklung (C) 2026 steel-raven | MIT License
+#    Eigenständig gepflegter Fork; Vorabversion für separate Testinstanzen.
+#
+# MIT License
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+readonly project_url="https://github.com/steel-raven/Paperless-ngx-Backup-Script"
+# Nur stabile Releases melden; der heruntergeladene Text wird niemals ausgeführt.
+readonly update_url="${project_url}/releases/latest/download/Paperless-ngx-Backup-Script.sh"
 
 
 # --------------------------------------------------------------
@@ -439,6 +464,7 @@ write_backup_info() {
         printf 'Sicherungsbeginn: %s\n' "${backup_started}"
         printf 'Datenübertragung abgeschlossen: %s\n' "${completed}"
         printf 'Skriptversion: %s\n' "${version}"
+        printf 'Skriptprojekt: %s (steel-raven Fork)\n' "${project_url}"
         printf 'Paperless-ngx-Version: %s\n' "${paperless_version}"
         printf 'PostgreSQL-Serverversion (aus Dump): %s\n' "${server_version}"
         printf 'pg_dump-Version (aus Dump): %s\n\n' "${dump_version}"
@@ -530,17 +556,17 @@ if [[ -d "${backup_dir}" ]]; then
 
     # Beginn des Protokolls...
 
-    # Prüfen, ob das verwendete Skript aktuell ist oder ob ein Update auf GitHub verfügbar ist
+    # Nur veröffentlichte stabile Releases dieses Forks prüfen, keine Entwicklungsbranches.
     if ! command -v wget >/dev/null 2>&1 || ! command -v grep >/dev/null 2>&1 ||
        ! command -v cut >/dev/null 2>&1 || ! command -v dpkg >/dev/null 2>&1; then
         log ' - Hinweis: Die Updateprüfung wird übersprungen; benötigte Update-Helfer fehlen (wget, grep, cut oder dpkg).'
-    elif git_version=$(wget --no-check-certificate --timeout=60 --tries=1 -q -O- "https://raw.githubusercontent.com/toafez/Paperless-ngx-Backup-Script/refs/heads/main/Paperless-ngx-Backup-Script.sh" | grep '^version=' | cut -d '"' -f2) && [[ -n "${git_version}" ]]; then
+    elif git_version=$(wget --timeout=60 --tries=1 -q -O- "${update_url}" | grep '^version=' | cut -d '"' -f2) && [[ "${git_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(~rc[1-9][0-9]*)?$ ]]; then
         if dpkg --compare-versions "${git_version}" gt "${version}"; then
             log "${hr}"
             log "WICHTIGER HINWEIS:"
-            log "Auf GitHub steht ein Update für dieses Skript zur Verfügung."
+            log "Auf GitHub steht ein Update für dieses Skript zur Verfügung (steel-raven Fork)."
             log "Bitte aktualisiere deine Version ${version} auf die neue Version ${git_version}."
-            log "Link: https://github.com/toafez/Paperless-ngx-Backup-Script"
+            log "Link: ${project_url}/releases"
             log "${hr}"
             log ""
         else
@@ -568,6 +594,7 @@ if [[ -d "${backup_dir}" ]]; then
 
         log "${hr}"
         log "${project_container_name} Datensicherungsprotokoll vom $(datestamp) um $(timestamp) Uhr"
+        log " - Skript: steel-raven Fork ${version} (${project_url})"
         log " - Datensicherungsziel: ${backup_dir}"
         if [[ -n "${backup_mountpoint}" ]]; then
             log " - Mountschutz des Sicherungsziels: eingeschaltet (${backup_mountpoint})"

@@ -21,7 +21,8 @@ Ein gekürztes Beispiel mit **frei gewählten Beispielversionen**:
 ```text
 Sicherungsbeginn: 2026-09-19T12:34:56+0200
 Datenübertragung abgeschlossen: 2026-09-19T12:38:10+0200
-Skriptversion: 1.0-700
+Skriptversion: 1.1.0~rc1
+Skriptprojekt: https://github.com/steel-raven/Paperless-ngx-Backup-Script (steel-raven Fork)
 Paperless-ngx-Version: 2.20.0
 PostgreSQL-Serverversion (aus Dump): 16.4 (Debian 16.4-1)
 pg_dump-Version (aus Dump): 17.6
@@ -32,6 +33,7 @@ PostgreSQL-Image: postgres:16
 
 - **Zeitangaben:** Beginn der Sicherung und Abschluss der Datenübertragung. `+0200` bedeutet zwei Stunden vor UTC; verwendet wird die Zeitzone des NAS. Besitzrechte und Bereinigung werden anschließend bearbeitet.
 - **Skriptversion:** Die Versionsangabe aus dem ausgeführten Skript. Sie identifiziert keine individuellen Änderungen am Skript.
+- **Skriptprojekt:** Herkunft der ausgeführten Variante. Dieser Fork wird von steel-raven gepflegt; die ursprüngliche Arbeit stammt von Tommes/toafez.
 - **Paperless-ngx-Version:** Aus der Versionsdatei im verwendeten Paperless-Container gelesen, ohne die Anwendung zu initialisieren. Dafür wird dessen vorhandenes Python verwendet; auf dem NAS-Host wird kein Python benötigt oder installiert.
 - **PostgreSQL-Serverversion:** Die Version der Datenbank, aus der der gesicherte Dump erstellt wurde.
 - **pg_dump-Version:** Die Version des Exportwerkzeugs. Sie kann sich von der Serverversion unterscheiden. Beide Angaben werden aus dem Kopf der gesicherten SQL-Datei gelesen, ohne zusätzliche Datenbankverbindung.
